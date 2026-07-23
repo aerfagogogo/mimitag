@@ -9,6 +9,7 @@ enum AppDestination: Hashable {
 private enum AppSheetDestination: String, Identifiable {
     case newSession
     case settings
+    case team
 
     var id: String { rawValue }
 }
@@ -16,12 +17,14 @@ private enum AppSheetDestination: String, Identifiable {
 enum CompactWorkbenchTab: Hashable {
     case sessions
     case workspaces
+    case team
     case settings
 
     var title: String {
         switch self {
         case .sessions: return L10n.text("ui.session")
         case .workspaces: return L10n.text("ui.workspace")
+        case .team: return L10n.text("ui.team")
         case .settings: return L10n.text("ui.settings")
         }
     }
@@ -30,6 +33,7 @@ enum CompactWorkbenchTab: Hashable {
         switch self {
         case .sessions: return "bubble.left.and.bubble.right"
         case .workspaces: return "folder"
+        case .team: return "person.3.sequence"
         case .settings: return "gearshape"
         }
     }
@@ -126,14 +130,14 @@ struct WorkbenchNavigationState: Equatable {
             return nil
 
         case .compactPathChanged(let tab, let path):
-            guard tab != .settings else { return nil }
+            guard tab != .settings, tab != .team else { return nil }
             compactSelectedTab = tab
             switch tab {
             case .sessions:
                 compactSessionPath = path
             case .workspaces:
                 compactWorkspacePath = path
-            case .settings:
+            case .team, .settings:
                 break
             }
 
@@ -153,8 +157,8 @@ struct WorkbenchNavigationState: Equatable {
 
         case .compactTabChanged(let tab):
             compactSelectedTab = tab
-            guard tab != .settings else {
-                // 设置是全局配置，切入时保留当前会话/工作区上下文。
+            guard tab != .settings, tab != .team else {
+                // 团队和设置是全局入口，切入时保留当前会话/工作区上下文。
                 return nil
             }
             let path = tab == .sessions ? compactSessionPath : compactWorkspacePath
@@ -288,7 +292,7 @@ struct WorkbenchNavigationState: Equatable {
             return .sessions
         case .workspaces:
             return .workspaces
-        case .settings:
+        case .team, .settings:
             return route.rootPage
         }
     }
@@ -381,6 +385,10 @@ struct UnifiedWorkbenchShell: View {
                     )
                 case .settings:
                     SettingsView(isInitialSetup: false)
+                case .team:
+                    NavigationStack {
+                        TeamConversationView()
+                    }
                 }
             }
             .onAppear {
@@ -434,6 +442,14 @@ struct UnifiedWorkbenchShell: View {
                 Label(CompactWorkbenchTab.workspaces.title, systemImage: CompactWorkbenchTab.workspaces.systemImage)
             }
             .tag(CompactWorkbenchTab.workspaces)
+
+            NavigationStack {
+                TeamConversationView()
+            }
+            .tabItem {
+                Label(CompactWorkbenchTab.team.title, systemImage: CompactWorkbenchTab.team.systemImage)
+            }
+            .tag(CompactWorkbenchTab.team)
 
             NavigationStack {
                 SettingsView(
@@ -654,6 +670,9 @@ struct UnifiedWorkbenchShell: View {
             onOpenSettings: {
                 // 设置是全局配置，不改变当前会话或工作区选择。
                 presentedSheet = .settings
+            },
+            onOpenTeam: {
+                presentedSheet = .team
             },
             onNewSession: {
                 // 侧栏底部保留全局新建入口，和会话页右上角共用同一个创建流程。
@@ -1030,17 +1049,20 @@ struct WorkbenchSidebarFooter: View {
     let tokens: ThemeTokens
     let bottomSafeAreaInset: CGFloat
     let onOpenSettings: () -> Void
+    let onOpenTeam: () -> Void
     let onNewSession: () -> Void
 
     init(
         tokens: ThemeTokens,
         bottomSafeAreaInset: CGFloat = 0,
         onOpenSettings: @escaping () -> Void,
+        onOpenTeam: @escaping () -> Void,
         onNewSession: @escaping () -> Void
     ) {
         self.tokens = tokens
         self.bottomSafeAreaInset = bottomSafeAreaInset
         self.onOpenSettings = onOpenSettings
+        self.onOpenTeam = onOpenTeam
         self.onNewSession = onNewSession
     }
 
@@ -1065,6 +1087,22 @@ struct WorkbenchSidebarFooter: View {
             }
             .accessibilityLabel(L10n.text("ui.open_settings"))
             .accessibilityIdentifier("sidebar.settings")
+
+            Button(action: onOpenTeam) {
+                Label(L10n.text("ui.team"), systemImage: "person.3.sequence")
+                    .font(themeStore.uiFont(.subheadline, weight: .medium))
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(tokens.secondaryText)
+            .background(tokens.surface.opacity(0.72), in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(tokens.border.opacity(0.6), lineWidth: 1)
+            }
+            .accessibilityLabel(L10n.text("ui.open_agent_team"))
+            .accessibilityIdentifier("sidebar.team")
 
             Spacer(minLength: 0)
 

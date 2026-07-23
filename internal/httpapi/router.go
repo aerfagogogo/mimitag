@@ -36,6 +36,7 @@ type Router struct {
 	upgrader     websocket.Upgrader
 	monitor      *relayMonitor
 	historyMedia *appServerHistoryMediaStore
+	teamClient   *http.Client
 	// tailscalePathLookup 只在连接验证/测速时读取一次本机 Tailscale 状态。
 	// 使用可注入函数既避免常驻轮询，也让无 Tailscale 环境下的接口行为可测试。
 	tailscalePathLookup tailscaleNetworkPathLookup
@@ -87,6 +88,7 @@ func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manage
 		},
 		monitor:                     newRelayMonitor(),
 		historyMedia:                newAppServerHistoryMediaStore(),
+		teamClient:                  newTeamHTTPClient(),
 		tailscalePathLookup:         defaultTailscaleNetworkPathLookup,
 		gatewayThreads:              map[string]appServerGatewayAllowedThread{},
 		managedWorktrees:            map[string]managedWorktree{},
@@ -136,6 +138,8 @@ func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manage
 	mux.Handle("/api/git/pull-request", r.auth.Middleware(http.HandlerFunc(r.gitPullRequestHandler)))
 	mux.Handle("/api/git/pull-request/status", r.auth.Middleware(http.HandlerFunc(r.gitPullRequestStatusHandler)))
 	mux.Handle("/api/voice/transcribe", r.auth.Middleware(http.HandlerFunc(r.voiceTranscribeHandler)))
+	mux.Handle("/api/team/bootstrap", r.auth.Middleware(http.HandlerFunc(r.teamBootstrapHandler)))
+	mux.Handle("/api/team/messages", r.auth.Middleware(http.HandlerFunc(r.teamMessagesHandler)))
 	mux.Handle("/api/app-server/config", r.auth.Middleware(http.HandlerFunc(r.appServerConfigHandler)))
 	mux.Handle("/api/app-server/history-media/", r.auth.Middleware(http.HandlerFunc(r.appServerHistoryMediaHandler)))
 	mux.Handle("/api/app-server/ws", r.auth.Middleware(http.HandlerFunc(r.appServerGatewayWS)))

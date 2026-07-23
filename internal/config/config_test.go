@@ -38,6 +38,46 @@ func TestValidateRejectsEmptyToken(t *testing.T) {
 	}
 }
 
+func TestLoadTeamConfigFromEnvironment(t *testing.T) {
+	clearAgentdEnv(t)
+	projectDir := t.TempDir()
+	t.Setenv("AGENTD_TOKEN", "0123456789abcdef0123456789abcdef")
+	t.Setenv("AGENTD_PROJECTS", projectDir)
+	t.Setenv("AGENTD_TEAM_ENABLED", "true")
+	t.Setenv("AGENTD_TEAM_BASE_URL", "http://127.0.0.1:7777/")
+	t.Setenv("AGENTD_TEAM_TOKEN", "opentag-token")
+	t.Setenv("AGENTD_TEAM_SERVER_ID", "server-id")
+	t.Setenv("AGENTD_TEAM_CHANNEL", "all")
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Team.Enabled ||
+		cfg.Team.BaseURL != "http://127.0.0.1:7777" ||
+		cfg.Team.Token != "opentag-token" ||
+		cfg.Team.ServerID != "server-id" ||
+		cfg.Team.Channel != "all" {
+		t.Fatalf("团队协作环境变量解析异常：%+v", cfg.Team)
+	}
+}
+
+func TestValidateTeamRequiresLoopbackOpenTag(t *testing.T) {
+	cfg := defaults()
+	cfg.Auth.Token = "0123456789abcdef0123456789abcdef"
+	cfg.Projects = []ProjectConfig{{ID: "demo", Name: "demo", Path: t.TempDir()}}
+	cfg.Team = TeamConfig{
+		Enabled:  true,
+		BaseURL:  "https://team.example.com",
+		Token:    "opentag-token",
+		ServerID: "server-id",
+		Channel:  "all",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("期望拒绝非 loopback OpenTag 地址")
+	}
+}
+
 func TestPlatformDefaultPathIgnoresAgentdConfig(t *testing.T) {
 	customPath := filepath.Join(t.TempDir(), "custom-config.json")
 	t.Setenv("AGENTD_CONFIG", customPath)

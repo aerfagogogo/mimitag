@@ -118,6 +118,7 @@ struct MimiRemoteApp: App {
     @StateObject private var logStore: LogStore
     @StateObject private var contextStore: SessionContextStore
     @StateObject private var sessionStore: SessionStore
+    @StateObject private var teamStore: TeamStore
     @StateObject private var themeStore: ThemeStore
     @StateObject private var notificationResponseAdapter: SessionNotificationResponseAdapter
 
@@ -132,6 +133,7 @@ struct MimiRemoteApp: App {
         _conversationStore = StateObject(wrappedValue: conversationStore)
         _logStore = StateObject(wrappedValue: logStore)
         _contextStore = StateObject(wrappedValue: contextStore)
+        _teamStore = StateObject(wrappedValue: TeamStore(appStore: appStore))
         _themeStore = StateObject(wrappedValue: themeStore)
         _notificationResponseAdapter = StateObject(wrappedValue: notificationResponseAdapter)
         _sessionStore = StateObject(wrappedValue: SessionStore(
@@ -154,6 +156,7 @@ struct MimiRemoteApp: App {
                 .environmentObject(conversationStore)
                 .environmentObject(logStore)
                 .environmentObject(contextStore)
+                .environmentObject(teamStore)
                 .environmentObject(themeStore)
                 .environmentObject(notificationResponseAdapter)
                 .onOpenURL { url in

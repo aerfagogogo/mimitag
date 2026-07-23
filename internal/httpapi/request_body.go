@@ -12,6 +12,8 @@ const (
 	defaultAPIRequestBodyMaxBytes int64 = 256 << 10
 	// pairing 未鉴权且只需要四个短字段，使用更小上限降低公网/LAN 垃圾请求的资源占用。
 	pairingRequestBodyMaxBytes int64 = 16 << 10
+	// 团队消息正文最多 16 KiB；额外空间用于 JSON 转义和字段名。
+	teamMessageRequestBodyMaxBytes int64 = 24 << 10
 	// 12 MiB 原始音频经过 base64 后约 16 MiB，再预留 1 MiB 给 JSON、文件名、语言和 prompt。
 	voiceRequestBodyMaxBytes int64 = 17 << 20
 )
@@ -37,6 +39,8 @@ func requestBodyLimitForPath(path string) int64 {
 		return pairingRequestBodyMaxBytes
 	case "/api/voice/transcribe":
 		return voiceRequestBodyMaxBytes
+	case "/api/team/messages":
+		return teamMessageRequestBodyMaxBytes
 	default:
 		return defaultAPIRequestBodyMaxBytes
 	}
