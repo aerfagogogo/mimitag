@@ -455,6 +455,23 @@ struct AgentAPIClient {
         return try await request(path: "/api/voice/transcribe", method: "POST", body: body, timeout: 60)
     }
 
+    func teamBootstrap() async throws -> TeamBootstrapResponse {
+        try await request(path: "/api/team/bootstrap", method: "GET", body: Optional<Data>.none)
+    }
+
+    func teamMessages(since: Int64) async throws -> TeamMessagesResponse {
+        let path = makePath(
+            "/api/team/messages",
+            query: ["since": since > 0 ? String(since) : nil]
+        )
+        return try await request(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    func sendTeamMessage(content: String) async throws -> TeamSendResponse {
+        let body = try JSONEncoder().encode(["content": content])
+        return try await request(path: "/api/team/messages", method: "POST", body: body)
+    }
+
     private func request<T: Decodable>(
         path: String,
         method: String,

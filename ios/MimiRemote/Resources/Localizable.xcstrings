@@ -1,6 +1,244 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "ui.agent" : {
+      "comment" : "Fallback display name for an AI agent.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent"
+          }
+        }
+      }
+    },
+    "ui.agent_team" : {
+      "comment" : "Title for the optional local multi-agent collaboration view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 团队"
+          }
+        }
+      }
+    },
+    "ui.agent_team_subtitle" : {
+      "comment" : "Explains that the team view uses the optional local OpenTag service.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collaborate with local agents through OpenTag"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过 OpenTag 与本地 Agent 协作"
+          }
+        }
+      }
+    },
+    "ui.choose_workspace_context" : {
+      "comment" : "Accessibility label for choosing a workspace to attach to a team message.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择工作区上下文"
+          }
+        }
+      }
+    },
+    "ui.no_team_messages" : {
+      "comment" : "Empty-state title in the agent team conversation.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No team messages yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有团队消息"
+          }
+        }
+      }
+    },
+    "ui.no_team_messages_description" : {
+      "comment" : "Empty-state guidance in the agent team conversation.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mention one or more agents to start collaborating."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "@ 一个或多个 Agent 开始协作。"
+          }
+        }
+      }
+    },
+    "ui.no_workspace_context" : {
+      "comment" : "Menu option that sends a team message without a workspace envelope.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不附带工作区"
+          }
+        }
+      }
+    },
+    "ui.open_agent_team" : {
+      "comment" : "Accessibility label for opening the optional agent team view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open agent team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Agent 团队"
+          }
+        }
+      }
+    },
+    "ui.team" : {
+      "comment" : "Short navigation title for the optional agent team view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "团队"
+          }
+        }
+      }
+    },
+    "ui.team_message_placeholder" : {
+      "comment" : "Placeholder in the team message composer.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Message @codex, @claude…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给 @codex、@claude… 发消息"
+          }
+        }
+      }
+    },
+    "ui.team_same_message_hint" : {
+      "comment" : "Hint explaining that a team message can mention multiple agents.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "One message can mention multiple agents"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一条消息可以 @ 多个 Agent"
+          }
+        }
+      }
+    },
+    "ui.team_workspace_context_value" : {
+      "comment" : "Shows which workspace will be attached to the next team message. The argument is a workspace name.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace context: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将附带工作区：%@"
+          }
+        }
+      }
+    },
+    "ui.workspace_context" : {
+      "comment" : "Label for the workspace context selector in the team view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区上下文"
+          }
+        }
+      }
+    },
+    "ui.you" : {
+      "comment" : "Display name for messages sent by the current user.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你"
+          }
+        }
+      }
+    },
     "?" : {
       "comment" : "A placeholder text that can be displayed in place of a progress ring when the user's usage is unknown.",
       "isCommentAutoGenerated" : true,

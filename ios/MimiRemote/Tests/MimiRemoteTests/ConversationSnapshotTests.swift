@@ -1264,7 +1264,7 @@ final class ConversationSnapshotTests: SimplifiedChineseSnapshotTestCase {
             .frame(maxHeight: .infinity)
 
             // 直接渲染生产组件，避免 NavigationSplitView 在测试宿主中自动折叠侧栏。
-            WorkbenchSidebarFooter(tokens: tokens, onOpenSettings: {}, onNewSession: {})
+            WorkbenchSidebarFooter(tokens: tokens, onOpenSettings: {}, onOpenTeam: {}, onNewSession: {})
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environmentObject(themeStore)

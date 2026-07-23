@@ -273,6 +273,26 @@ After changing the configuration, restart from the current service owner: use **
 
 This remains an experimental channel. Goal, archive, and fork are not available for Claude sessions; there is no APNs background push or cloud synchronization. A bounded replay ring covers normal disconnects, while bridge/Mac restarts fall back to local Claude history and can still lose a very small unflushed window. Read the [Claude bridge architecture (Chinese)](docs/claude-bridge-architecture.md) before enabling it.
 
+## Local agent team with OpenTag (optional)
+
+Mimi Remote can show one OpenTag channel as an agent-team conversation. The integration is disabled by default and adds no cloud relay: iPhone/iPad still connects only to `agentd`, while `agentd` forwards the minimum channel, agent, and message operations to a loopback-only OpenTag service. The OpenTag token and server ID stay in the Mac-side `0600` configuration file and are never returned to the app.
+
+Start and configure your own [OpenTag](https://github.com/fancyboi999/open-tag) instance, then enable the adapter:
+
+```json
+{
+  "team": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:7777",
+    "token": "<OpenTag user token>",
+    "server_id": "<OpenTag server ID>",
+    "channel": "all"
+  }
+}
+```
+
+`team.base_url` accepts only loopback HTTP addresses. `channel` can be the OpenTag channel name or ID. After restarting `agentd`, open **Team** in the iOS tab bar or Mac/iPad sidebar. A selected Mimi workspace is added as a visible message envelope so multiple agents can share the same task context.
+
 ## Current limitations
 
 - Mimi Remote is not a general-purpose SSH terminal and does not run Codex inside the iOS sandbox.
@@ -285,7 +305,7 @@ For the complete, code-oriented capability matrix and risk list, see [project st
 
 ## Privacy and security
 
-Mimi Remote has no ads, analytics SDK, or maintainer-operated telemetry service. Project content, conversations, logs, code, and Codex/Claude credentials remain on your devices unless you explicitly use a third-party service such as Codex, Claude Code, GitHub, Codex voice transcription, or MCP. Apple voice input uses on-device SpeechAnalyzer processing.
+Mimi Remote has no ads, analytics SDK, or maintainer-operated telemetry service. Project content, conversations, logs, code, and Codex/Claude credentials remain on your devices unless you explicitly use a third-party service such as Codex, Claude Code, OpenTag, GitHub, Codex voice transcription, or MCP. Apple voice input uses on-device SpeechAnalyzer processing.
 
 The app rejects public HTTP endpoints at the application layer and is designed for Tailscale or same-LAN private-network use. Do not put real tokens, Tailnet IPs, private paths, logs, or project content in public issues, pull requests, or screenshots. Report vulnerabilities privately using [SECURITY.md](SECURITY.md). See the bilingual [privacy policy](docs/privacy-policy.md), [terms of use](docs/terms-of-use.md), and [support page](docs/support.md).
 

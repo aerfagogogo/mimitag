@@ -25,6 +25,7 @@ type Config struct {
 	Voice         VoiceConfig     `json:"voice"`
 	Codex         CodexConfig     `json:"codex"`
 	Claude        ClaudeConfig    `json:"claude"`
+	Team          TeamConfig      `json:"team"`
 	Session       SessionConfig   `json:"session"`
 	Debug         DebugConfig     `json:"debug"`
 	Projects      []ProjectConfig `json:"projects"`
@@ -58,6 +59,16 @@ type ClaudeConfig struct {
 	Args                 []string          `json:"args,omitempty"`
 	Env                  map[string]string `json:"env,omitempty"`
 	MaxConcurrentBridges int               `json:"max_concurrent_bridges"`
+}
+
+// TeamConfig 配置一个仅在本机可达的 OpenTag 服务。移动端仍只连接 agentd，
+// OpenTag 的登录凭据不会下发到 iPhone/iPad。
+type TeamConfig struct {
+	Enabled  bool   `json:"enabled"`
+	BaseURL  string `json:"base_url"`
+	Token    string `json:"token"`
+	ServerID string `json:"server_id"`
+	Channel  string `json:"channel"`
 }
 
 type RuntimeConfig struct {
@@ -212,6 +223,10 @@ func defaults() Config {
 				"TERM": "xterm-256color",
 			},
 		},
+		Team: TeamConfig{
+			BaseURL: "http://127.0.0.1:7777",
+			Channel: "all",
+		},
 		Session: SessionConfig{
 			OutputBufferBytes: 128 * 1024,
 		},
@@ -259,6 +274,21 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
 			cfg.Claude.MaxConcurrentBridges = n
 		}
+	}
+	if v := os.Getenv("AGENTD_TEAM_ENABLED"); v != "" {
+		cfg.Team.Enabled = truthy(v)
+	}
+	if v := os.Getenv("AGENTD_TEAM_BASE_URL"); v != "" {
+		cfg.Team.BaseURL = strings.TrimRight(strings.TrimSpace(v), "/")
+	}
+	if v := os.Getenv("AGENTD_TEAM_TOKEN"); v != "" {
+		cfg.Team.Token = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("AGENTD_TEAM_SERVER_ID"); v != "" {
+		cfg.Team.ServerID = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("AGENTD_TEAM_CHANNEL"); v != "" {
+		cfg.Team.Channel = strings.TrimSpace(v)
 	}
 	if v := os.Getenv("AGENTD_APP_SERVER_TRANSPORT"); v != "" {
 		cfg.AppServer.Transport = strings.TrimSpace(strings.ToLower(v))
@@ -484,6 +514,23 @@ func (c Config) Validate() error {
 	if c.Claude.Enabled && c.Claude.MaxConcurrentBridges <= 0 {
 		return fmt.Errorf("claude.max_concurrent_bridges 必须大于 0")
 	}
+	if c.Team.Enabled {
+		if strings.TrimSpace(c.Team.BaseURL) == "" {
+			return fmt.Errorf("team.base_url 不能为空")
+		}
+		if !isLoopbackHTTPURL(c.Team.BaseURL) {
+			return fmt.Errorf("team.base_url 只允许本机 HTTP 地址；移动端应通过 agentd 访问 OpenTag")
+		}
+		if strings.TrimSpace(c.Team.Token) == "" {
+			return fmt.Errorf("team.token 不能为空")
+		}
+		if strings.TrimSpace(c.Team.ServerID) == "" {
+			return fmt.Errorf("team.server_id 不能为空")
+		}
+		if strings.TrimSpace(c.Team.Channel) == "" {
+			return fmt.Errorf("team.channel 不能为空")
+		}
+	}
 	switch normalizeRuntimeType(c.Runtime.Type) {
 	case "codex_app_server":
 	default:
@@ -599,4 +646,15 @@ func isLoopbackListen(raw string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func isLoopbackHTTPURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "http" || parsed.Host == "" {
+		return false
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	return isLoopbackListen(parsed.Host)
 }
