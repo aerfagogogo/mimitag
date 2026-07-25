@@ -2056,6 +2056,87 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(nextType.logAppends.count, 1)
     }
 
+    func testEventReducerKeepsRetryingTransportErrorsOutOfFailureUI() async {
+        let metadata = AgentEventMetadata(
+            seq: 45,
+            sessionID: "retrying_thread",
+            turnID: "retrying_turn",
+            itemID: nil,
+            messageID: nil,
+            clientMessageID: nil,
+            revision: nil,
+            createdAt: nil
+        )
+        let output = await EventReducer().reduce(
+            .error(
+                AgentErrorPayload(
+                    message: "Reconnecting... 2/5",
+                    code: "stream_disconnected",
+                    retryable: true
+                ),
+                metadata
+            ),
+            fallbackSessionID: "fallback",
+            outputIdleClearDelay: 0
+        )
+
+        XCTAssertTrue(output.statusUpdates.isEmpty)
+        XCTAssertTrue(output.foregroundClears.isEmpty)
+        XCTAssertTrue(output.activeTurnMutations.isEmpty)
+        XCTAssertTrue(output.messageMutations.isEmpty)
+        XCTAssertNil(output.errorMessage)
+        XCTAssertEqual(output.logAppends.count, 1)
+        XCTAssertTrue(output.logAppends[0].text.contains("Reconnecting... 2/5"))
+    }
+
+    func testEventReducerHidesTransportWarningsButKeepsActionableWarnings() async {
+        let metadata = AgentEventMetadata(
+            seq: 46,
+            sessionID: "warning_thread",
+            turnID: "warning_turn",
+            itemID: nil,
+            messageID: nil,
+            clientMessageID: nil,
+            revision: nil,
+            createdAt: nil
+        )
+        let reducer = EventReducer()
+        let fallback = await reducer.reduce(
+            .warning(
+                AgentErrorPayload(
+                    message: "Falling back from WebSockets to HTTPS transport. request timed out",
+                    code: nil,
+                    retryable: nil
+                ),
+                metadata
+            ),
+            fallbackSessionID: "fallback",
+            outputIdleClearDelay: 0
+        )
+        let deprecation = await reducer.reduce(
+            .warning(
+                AgentErrorPayload(
+                    message: "This protocol version will be removed soon",
+                    code: "deprecationNotice",
+                    retryable: false
+                ),
+                metadata
+            ),
+            fallbackSessionID: "fallback",
+            outputIdleClearDelay: 0
+        )
+
+        XCTAssertTrue(fallback.messageMutations.isEmpty)
+        XCTAssertEqual(fallback.logAppends.count, 1)
+        XCTAssertEqual(deprecation.messageMutations.count, 1)
+        if case .system(_, let sessionID, let kind, _) = deprecation.messageMutations[0] {
+            XCTAssertEqual(sessionID, "warning_thread")
+            XCTAssertEqual(kind, .error)
+        } else {
+            XCTFail("Expected actionable warning system message")
+        }
+    }
+
     func testEventReducerRoutesRuntimeErrorToOwningSessionAndMarksFailed() async throws {
         let reducer = EventReducer()
         let metadata = AgentEventMetadata(

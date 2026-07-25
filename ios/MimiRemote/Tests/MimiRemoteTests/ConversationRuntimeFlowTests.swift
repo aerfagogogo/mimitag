@@ -165,7 +165,7 @@ extension ConversationDataFlowTests {
             )
         )
         await refreshTask.value
-        await selectTask.value
+        _ = await selectTask.value
 
         XCTAssertEqual(conversationStore.messages(for: history.id).map(\.content), ["新历史"])
         XCTAssertTrue(store.canLoadEarlierHistory(sessionID: history.id))
@@ -452,6 +452,58 @@ extension ConversationDataFlowTests {
         try await waitForWebSocketStatus(.connected, store: store)
     }
 
+    func testWebSocketReconnectDoesNotWaitForSlowSnapshotRefresh() async throws {
+        let project = makeProject(id: "proj_ws_fast_reconnect")
+        let running = makeSession(
+            id: "sess_ws_fast_reconnect",
+            projectID: project.id,
+            title: "运行中",
+            status: "running",
+            source: "codex"
+        )
+        let gate = PreparedConnectionGate()
+        let snapshot = try makeSessionResponse(session: running, recentOutput: nil, lastSeq: nil)
+        let client = MockSessionStoreClient(
+            projects: [project],
+            sessions: [running],
+            messagesResult: [],
+            sessionHandler: { _, _ in
+                await gate.wait()
+                return snapshot
+            }
+        )
+        let appStore = AppStore()
+        appStore.token = "test-token"
+        var sockets: [MockWebSocketClient] = []
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: {
+                let socket = MockWebSocketClient()
+                sockets.append(socket)
+                return socket
+            },
+            webSocketReconnectDelayNanoseconds: { _ in 0 }
+        )
+
+        store.selectedProjectID = project.id
+        await store.refreshAll(autoAttach: false)
+        store.takeOverSession(running)
+        await store.selectSession(running)
+        sockets[0].emitStatus(.connected)
+        try await waitForWebSocketStatus(.connected, store: store)
+
+        sockets[0].emitStatus(.failed("network dropped"))
+        await gate.waitUntilStarted()
+
+        XCTAssertEqual(sockets.count, 2, "慢 REST 快照不能挡住 WebSocket 重连")
+        XCTAssertEqual(sockets[1].connectedSessionIDs, [running.id])
+
+        await gate.release()
+    }
+
     func testWebSocketAutoReconnectDoesNotGiveUpWhileSessionStaysRunning() async throws {
         let project = makeProject(id: "proj_ws_persistent_reconnect")
         let running = makeSession(id: "sess_ws_persistent_reconnect", projectID: project.id, title: "运行中", status: "running", source: "codex")
@@ -639,12 +691,12 @@ extension ConversationDataFlowTests {
         sockets[0].emitStatus(.failed("turn completed while reconnecting"))
 
         // 快照显示会话不再运行时不能一次性放弃重连：单次 thread/read 可能是上游刚恢复时的
-        // idle 误读。订阅对历史会话同样有效，重连应继续并恢复事件通道。
+        // idle 误读。事件通道先恢复后，连接态保护会让这份迟到快照保持为 running。
         for _ in 0..<80 where sockets.count < 2 {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTAssertEqual(sockets.count, 2)
-        XCTAssertEqual(store.selectedSession?.status, "history")
+        XCTAssertEqual(store.selectedSession?.status, "running")
         sockets[1].emitStatus(.connected)
         try await waitForWebSocketStatus(.connected, store: store)
         XCTAssertNil(store.errorMessage)

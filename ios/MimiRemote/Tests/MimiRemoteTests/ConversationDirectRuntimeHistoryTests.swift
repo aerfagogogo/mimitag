@@ -1824,10 +1824,22 @@ extension ConversationDataFlowTests {
         if case .error(let payload, let meta) = try XCTUnwrap(projector.project(error)) {
             XCTAssertEqual(payload.message, "boom")
             XCTAssertEqual(payload.code, "authentication_failed")
+            XCTAssertNil(payload.retryable)
             XCTAssertEqual(meta.sessionID, "thr_demo")
             XCTAssertEqual(meta.turnID, "turn_demo")
         } else {
             XCTFail("Expected error")
+        }
+
+        let retrying = try decodeAppServerNotification(
+            #"{"method":"error","params":{"threadId":"thr_demo","turnId":"turn_demo","error":{"message":"Reconnecting... 2/5","code":"stream_disconnected"},"willRetry":true}}"#
+        )
+        if case .error(let payload, _) = try XCTUnwrap(projector.project(retrying)) {
+            XCTAssertEqual(payload.message, "Reconnecting... 2/5")
+            XCTAssertEqual(payload.code, "stream_disconnected")
+            XCTAssertEqual(payload.retryable, true)
+        } else {
+            XCTFail("Expected retryable error")
         }
     }
 

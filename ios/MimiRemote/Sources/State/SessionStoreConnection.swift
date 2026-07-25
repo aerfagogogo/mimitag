@@ -443,41 +443,59 @@ extension SessionStore {
         guard selectedSessionID == sessionID else {
             return
         }
-        let refreshedSession = await refreshSessionSnapshotBeforeReconnect(sessionID: sessionID) ?? latestSession
-        guard connectionTermination == nil,
-              !appStore.requiresRePairing,
-              !isNetworkUnavailable,
-              selectedSessionID == sessionID else {
-            return
-        }
-        // 快照可能在上游刚恢复时把运行中的 turn 误读成 idle；不能据此一次性放弃重连。
-        // 订阅对历史会话同样有效：resume 后权威状态自行纠正，turn 真结束也会由
-        // turn/completed 事件如实呈现。
-        connectWebSocket(refreshedSession, isReconnectAttempt: true, allowNonRunning: true)
+        // 先恢复事件通道，再在后台补 REST 快照和历史。旧实现把 thread/read + 全量历史
+        // 串在 WebSocket 前面；其中任一请求变慢，界面就会长时间停在“连接已断开”。
+        // 订阅恢复后 buffered events 会先补实时事件，REST 只负责最终校准。
+        connectWebSocket(latestSession, isReconnectAttempt: true, allowNonRunning: true)
+        let connectionGeneration = webSocketConnectionGeneration
+        await refreshSessionSnapshotAfterReconnect(
+            sessionID: sessionID,
+            connectionGeneration: connectionGeneration
+        )
     }
 
-    func refreshSessionSnapshotBeforeReconnect(sessionID: SessionID) async -> AgentSession? {
+    func refreshSessionSnapshotAfterReconnect(
+        sessionID: SessionID,
+        connectionGeneration: Int
+    ) async {
         guard let current = sessionsByID[sessionID] else {
-            return nil
+            return
         }
         do {
             let client = try clientFactory()
             let response = try await client.session(id: sessionID, afterSeq: replayWatermark(for: sessionID))
+            guard isCurrentWebSocketConnection(
+                sessionID: sessionID,
+                generation: connectionGeneration
+            ),
+            selectedSessionID == sessionID else {
+                return
+            }
             let refreshed = self.session(response.session, in: workspaceForSession(current))
             upsert(refreshed)
             if let recentOutput = response.recentOutput, !recentOutput.isEmpty {
-                // 重连前只补诊断日志；结构化消息由 history 和 app-server event 补齐。
+                // REST 快照只补诊断日志；结构化消息由 history 和 app-server event 补齐。
                 logStore.append(recentOutput, sessionID: sessionID, seq: response.lastSeq)
             }
-            // 重连前先刷新一次消息页，用 cursor/id/revision 合并可能错过的结构化消息。
-            await loadHistory(for: refreshed)
-            return refreshed
+            // 静默校准可能错过的结构化消息，不用历史加载状态遮住已经恢复的连接。
+            await loadHistory(for: refreshed, quiet: true)
         } catch {
             if terminateConnectionIfCredentialsInvalid(error) {
-                return nil
+                return
             }
-            setStatusMessage(L10n.format("ui.snapshot_refresh_failed_before_reconnection_value", error.localizedDescription))
-            return current
+            guard isCurrentWebSocketConnection(
+                sessionID: sessionID,
+                generation: connectionGeneration
+            ),
+            selectedSessionID == sessionID else {
+                return
+            }
+            // WebSocket 已恢复时，REST 校准失败不应重新把页面打回错误态；日志回放仍可继续。
+            logStore.append(
+                "\n[agentd] snapshot refresh after reconnect failed: \(error.localizedDescription)\n",
+                sessionID: sessionID,
+                seq: nil
+            )
         }
     }
 

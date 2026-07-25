@@ -246,12 +246,33 @@ actor EventReducer {
         case .warning(let payload, let metadata):
             output.logAppends.append(EventReducerLogAppend(
                 text: "\n[agentd] warning: \(payload.message)\n",
-                sessionID: fallbackSessionID,
+                sessionID: metadata.sessionID ?? fallbackSessionID,
                 seq: nil
             ))
-            output.messageMutations.append(.system(L10n.format("ui.run_warning_value", payload.message), fallbackSessionID, .error, metadata))
+            // Codex reports transport recovery progress as warnings. These messages are
+            // useful in diagnostics, but adding every attempt to the transcript produces
+            // a wall of red cards even when the turn recovers successfully.
+            if !Self.isTransientTransportNotice(payload) {
+                output.messageMutations.append(.system(
+                    L10n.format("ui.run_warning_value", payload.message),
+                    metadata.sessionID ?? fallbackSessionID,
+                    .error,
+                    metadata
+                ))
+            }
         case .error(let payload, let metadata):
             let id = metadata.sessionID ?? fallbackSessionID
+            if payload.retryable == true || Self.isTransientTransportNotice(payload) {
+                // `error` + `willRetry=true` is progress, not a final turn failure.
+                // Keep it in logs and let the later turn/completed event decide the
+                // authoritative lifecycle.
+                output.logAppends.append(EventReducerLogAppend(
+                    text: "\n[agentd] retrying: \(payload.message)\n",
+                    sessionID: id,
+                    seq: nil
+                ))
+                break
+            }
             // 多 runtime 下错误必须按通知携带的 thread 归属，不能回退到当前选中的其他会话。
             output.statusUpdates.append((id, SessionStatus.failed.rawValue))
             output.foregroundClears.append(id)
@@ -291,6 +312,17 @@ actor EventReducer {
         }
 
         return output
+    }
+
+    private static func isTransientTransportNotice(_ payload: AgentErrorPayload) -> Bool {
+        if payload.retryable == true {
+            return true
+        }
+        let message = payload.message
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return message.hasPrefix("reconnecting")
+            || message.contains("falling back from websockets to https transport")
     }
 
     private func setActiveTurnIfPresent(

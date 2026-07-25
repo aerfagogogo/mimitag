@@ -1334,7 +1334,10 @@ struct CodexAppServerEventProjector {
                 ?? fallback,
             code: firstString(in: params, keys: ["code"])
                 ?? nestedString(in: params, key: "error", nestedKey: "code"),
-            retryable: params["retryable"]?.boolValue
+            // Codex app-server v2 calls this field `willRetry`. Older gateways used
+            // `retryable`, so accept both. Missing this bit turns temporary transport
+            // retries into terminal failures in the conversation UI.
+            retryable: params["willRetry"]?.boolValue ?? params["retryable"]?.boolValue
         )
     }
 
