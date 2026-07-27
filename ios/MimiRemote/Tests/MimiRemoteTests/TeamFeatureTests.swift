@@ -2,6 +2,33 @@ import XCTest
 @testable import MimiRemote
 
 final class TeamFeatureTests: XCTestCase {
+    @MainActor
+    func testTeamCollaborationsAreIndependentAndPersistPerWorkspace() {
+        let suiteName = "TeamFeatureTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Unable to create isolated defaults")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let appStore = AppStore(defaults: defaults)
+        let store = TeamStore(appStore: appStore, defaults: defaults)
+        let firstProject = AgentProject(id: "first", name: "First", path: "/tmp/first")
+        let secondProject = AgentProject(id: "second", name: "Second", path: "/tmp/second")
+
+        let first = store.createCollaboration(project: firstProject)
+        let second = store.createCollaboration(project: firstProject)
+        _ = store.createCollaboration(project: secondProject)
+
+        XCTAssertNotEqual(first.id, second.id)
+        XCTAssertEqual(store.collaborations(for: firstProject.id).count, 2)
+        XCTAssertEqual(store.collaborations(for: secondProject.id).count, 1)
+
+        let restored = TeamStore(appStore: appStore, defaults: defaults)
+        XCTAssertEqual(Set(restored.collaborations(for: firstProject.id).map(\.id)), [first.id, second.id])
+        XCTAssertEqual(restored.collaborations(for: secondProject.id).count, 1)
+    }
+
     func testWorkspaceScopeRoundTrip() {
         let project = AgentProject(id: "demo", name: "Demo", path: "/tmp/demo")
         let wrapped = TeamWorkspaceScope.wrap("请检查测试", project: project)

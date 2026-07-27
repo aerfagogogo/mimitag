@@ -1,244 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "ui.agent" : {
-      "comment" : "Fallback display name for an AI agent.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agent"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agent"
-          }
-        }
-      }
-    },
-    "ui.agent_team" : {
-      "comment" : "Title for the optional local multi-agent collaboration view.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agent team"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agent 团队"
-          }
-        }
-      }
-    },
-    "ui.agent_team_subtitle" : {
-      "comment" : "Explains that the team view uses the optional local OpenTag service.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Collaborate with local agents through OpenTag"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "通过 OpenTag 与本地 Agent 协作"
-          }
-        }
-      }
-    },
-    "ui.choose_workspace_context" : {
-      "comment" : "Accessibility label for choosing a workspace to attach to a team message.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose workspace context"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择工作区上下文"
-          }
-        }
-      }
-    },
-    "ui.no_team_messages" : {
-      "comment" : "Empty-state title in the agent team conversation.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No team messages yet"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "还没有团队消息"
-          }
-        }
-      }
-    },
-    "ui.no_team_messages_description" : {
-      "comment" : "Empty-state guidance in the agent team conversation.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mention one or more agents to start collaborating."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "@ 一个或多个 Agent 开始协作。"
-          }
-        }
-      }
-    },
-    "ui.no_workspace_context" : {
-      "comment" : "Menu option that sends a team message without a workspace envelope.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No workspace context"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不附带工作区"
-          }
-        }
-      }
-    },
-    "ui.open_agent_team" : {
-      "comment" : "Accessibility label for opening the optional agent team view.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open agent team"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开 Agent 团队"
-          }
-        }
-      }
-    },
-    "ui.team" : {
-      "comment" : "Short navigation title for the optional agent team view.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Team"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "团队"
-          }
-        }
-      }
-    },
-    "ui.team_message_placeholder" : {
-      "comment" : "Placeholder in the team message composer.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Message @codex, @claude…"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "给 @codex、@claude… 发消息"
-          }
-        }
-      }
-    },
-    "ui.team_same_message_hint" : {
-      "comment" : "Hint explaining that a team message can mention multiple agents.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "One message can mention multiple agents"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "一条消息可以 @ 多个 Agent"
-          }
-        }
-      }
-    },
-    "ui.team_workspace_context_value" : {
-      "comment" : "Shows which workspace will be attached to the next team message. The argument is a workspace name.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Workspace context: %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "将附带工作区：%@"
-          }
-        }
-      }
-    },
-    "ui.workspace_context" : {
-      "comment" : "Label for the workspace context selector in the team view.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Workspace context"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "工作区上下文"
-          }
-        }
-      }
-    },
-    "ui.you" : {
-      "comment" : "Display name for messages sent by the current user.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "You"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "你"
-          }
-        }
-      }
-    },
     "?" : {
       "comment" : "A placeholder text that can be displayed in place of a progress ring when the user's usage is unknown.",
       "isCommentAutoGenerated" : true,
@@ -1166,6 +928,23 @@
         }
       }
     },
+    "ui.after_a_team_collaboration_is_created" : {
+      "comment" : "Explains where newly created team collaborations will appear.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New collaborations in this workspace will appear here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这个工作区新建团队协作后，会显示在这里。"
+          }
+        }
+      }
+    },
     "ui.after_confirmation_write_the_precise_rules_suggested_by" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -1307,6 +1086,23 @@
         }
       }
     },
+    "ui.agent" : {
+      "comment" : "Fallback display name for an AI agent.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent"
+          }
+        }
+      }
+    },
     "ui.agent_requests_additional_input" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -1388,6 +1184,42 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agent 请求修改文件"
+          }
+        }
+      }
+    },
+    "ui.agent_team" : {
+      "comment" : "Title for the optional local multi-agent collaboration view.",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 团队"
+          }
+        }
+      }
+    },
+    "ui.agent_team_subtitle" : {
+      "comment" : "Explains that the team view uses the optional local OpenTag service.",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collaborate with local agents through OpenTag"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过 OpenTag 与本地 Agent 协作"
           }
         }
       }
@@ -3928,6 +3760,24 @@
         }
       }
     },
+    "ui.choose_workspace_context" : {
+      "comment" : "Accessibility label for choosing a workspace to attach to a team message.",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择工作区上下文"
+          }
+        }
+      }
+    },
     "ui.chore_synchronize_the_current_branch" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -4615,6 +4465,7 @@
     },
     "ui.codex_remaining_usage" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -14681,6 +14532,23 @@
         }
       }
     },
+    "ui.new_team_collaboration" : {
+      "comment" : "Action and default title for creating a team collaboration.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New team collaboration"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建团队协作"
+          }
+        }
+      }
+    },
     "ui.news" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -15328,6 +15196,75 @@
         }
       }
     },
+    "ui.no_team_collaborations_yet" : {
+      "comment" : "Empty-state title for a workspace with no team collaborations.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No team collaborations yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有团队协作"
+          }
+        }
+      }
+    },
+    "ui.no_team_messages" : {
+      "comment" : "Empty-state title in the agent team conversation.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No team messages yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有团队消息"
+          }
+        }
+      }
+    },
+    "ui.no_team_messages_description" : {
+      "comment" : "Empty-state guidance in the agent team conversation.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mention one or more agents to start collaborating."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "@ 一个或多个 Agent 开始协作。"
+          }
+        }
+      }
+    },
+    "ui.no_workspace_context" : {
+      "comment" : "Menu option that sends a team message without a workspace envelope.",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不附带工作区"
+          }
+        }
+      }
+    },
     "ui.no_workspace_has_been_opened_yet" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -15820,6 +15757,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "打开"
+          }
+        }
+      }
+    },
+    "ui.open_agent_team" : {
+      "comment" : "Accessibility label for opening the optional agent team view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open agent team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Agent 团队"
           }
         }
       }
@@ -18503,6 +18457,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最近 RPC"
+          }
+        }
+      }
+    },
+    "ui.recent_team_collaborations" : {
+      "comment" : "Heading above the recent team collaboration list.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recent collaborations"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近团队协作"
           }
         }
       }
@@ -24815,6 +24786,92 @@
         }
       }
     },
+    "ui.team" : {
+      "comment" : "Short navigation title for the optional agent team view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "团队"
+          }
+        }
+      }
+    },
+    "ui.team_message_count" : {
+      "comment" : "Message count shown in a team collaboration row.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld messages"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条消息"
+          }
+        }
+      }
+    },
+    "ui.team_message_placeholder" : {
+      "comment" : "Placeholder in the team message composer.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Message @codex, @claude…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给 @codex、@claude… 发消息"
+          }
+        }
+      }
+    },
+    "ui.team_same_message_hint" : {
+      "comment" : "Hint explaining that a team message can mention multiple agents.",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "One message can mention multiple agents"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一条消息可以 @ 多个 Agent"
+          }
+        }
+      }
+    },
+    "ui.team_workspace_context_value" : {
+      "comment" : "Shows which workspace will be attached to the next team message. The argument is a workspace name.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace context: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将附带工作区：%@"
+          }
+        }
+      }
+    },
     "ui.temporarily_save_changes_to_the_current_workspace_and" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -28721,6 +28778,23 @@
         }
       }
     },
+    "ui.unable_to_load_team_collaborations" : {
+      "comment" : "Error title when team collaboration data cannot load.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unable to load collaborations"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载团队协作"
+          }
+        }
+      }
+    },
     "ui.unable_to_load_workspace" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -31530,23 +31604,6 @@
         }
       }
     },
-    "ui.working_for_value" : {
-      "comment" : "Running work group title with a compact duration.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Working for %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已工作 %@"
-          }
-        }
-      }
-    },
     "ui.working_directory_is_not_in_remote_allowlist_value" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -31560,6 +31617,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工作目录不在远程 allowlist 中：%@"
+          }
+        }
+      }
+    },
+    "ui.working_for_value" : {
+      "comment" : "Running work group title with a compact duration.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Working for %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已工作 %@"
           }
         }
       }
@@ -31611,6 +31685,24 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工作区改动"
+          }
+        }
+      }
+    },
+    "ui.workspace_context" : {
+      "comment" : "Label for the workspace context selector in the team view.",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区上下文"
           }
         }
       }
@@ -32130,6 +32222,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "是"
+          }
+        }
+      }
+    },
+    "ui.you" : {
+      "comment" : "Display name for messages sent by the current user.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你"
           }
         }
       }

@@ -79,6 +79,35 @@ struct TeamSendResponse: Codable, Hashable {
     let seq: Int64?
 }
 
+struct TeamCollaboration: Identifiable, Codable, Hashable {
+    let id: String
+    let workspaceID: String
+    let workspaceName: String
+    let workspacePath: String
+    var title: String
+    let createdAt: Date
+    var lastActivityAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        project: AgentProject,
+        title: String = L10n.text("ui.new_team_collaboration"),
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        workspaceID = project.id
+        workspaceName = project.name
+        workspacePath = project.path
+        self.title = title
+        self.createdAt = createdAt
+        lastActivityAt = createdAt
+    }
+
+    var project: AgentProject {
+        AgentProject(id: workspaceID, name: workspaceName, path: workspacePath)
+    }
+}
+
 struct TeamWorkspaceScope: Hashable {
     static let prefix = "[Mimi 工作区："
     static let legacyPrefix = "[MimiTag 工作区："

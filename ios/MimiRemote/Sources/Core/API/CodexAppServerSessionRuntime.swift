@@ -215,7 +215,9 @@ actor CodexAppServerSessionRuntime {
         guard runtimeGatewayAvailable(in: config) else {
             throw CodexAppServerSessionRuntimeError.gatewayUnavailable
         }
-        let gatewayURL = try gatewayURL(from: config)
+        // 健康检查与正式 runtime 可能在冷启动时并发。如果二者复用同一个常驻 session，
+        // probe 完成后的 disconnect 会随机拆掉正式连接，表现为所有工作区同时 STREAM 断开。
+        let gatewayURL = try Self.isolatedProbeURL(from: gatewayURL(from: config))
         let probe = CodexAppServerConnection(transport: transportFactory())
         try await probe.connect(url: gatewayURL, token: token)
         await probe.disconnect()
@@ -1887,6 +1889,21 @@ actor CodexAppServerSessionRuntime {
         default:
             return value
         }
+    }
+
+    static func isolatedProbeURL(from gatewayURL: URL, nonce: UUID = UUID()) throws -> URL {
+        guard var components = URLComponents(url: gatewayURL, resolvingAgainstBaseURL: false) else {
+            throw AgentAPIError.invalidEndpoint
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "session" || $0.name == "last_seen" }
+        let probeSession = "probe-\(nonce.uuidString.replacingOccurrences(of: "-", with: ""))"
+        queryItems.append(URLQueryItem(name: "session", value: probeSession))
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            throw AgentAPIError.invalidEndpoint
+        }
+        return url
     }
 
     private static func gatewayLastSeenStorageKey(

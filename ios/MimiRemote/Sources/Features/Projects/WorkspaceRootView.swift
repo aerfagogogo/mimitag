@@ -615,7 +615,7 @@ private struct WorkspaceActionPressButtonStyle: ButtonStyle {
     }
 }
 
-private struct WorkspaceLibraryCard: View {
+struct WorkspaceLibraryCard: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
