@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "125BCE4367937D9DC555C549"
-               BuildableName = "MimiRemote.app"
+               BuildableName = "mimitag.app"
                BlueprintName = "MimiRemote"
                ReferencedContainer = "container:MimiRemote.xcodeproj">
             </BuildableReference>
@@ -29,7 +29,7 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "AA0000070000000000000000"
+               BlueprintIdentifier = "6EA37D042F071F4E5E66275B"
                BuildableName = "MimiRemoteUITests.xctest"
                BlueprintName = "MimiRemoteUITests"
                ReferencedContainer = "container:MimiRemote.xcodeproj">
@@ -45,11 +45,10 @@
       shouldAutocreateTestPlan = "YES">
       <Testables>
          <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
+            skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "AA0000070000000000000000"
+               BlueprintIdentifier = "6EA37D042F071F4E5E66275B"
                BuildableName = "MimiRemoteUITests.xctest"
                BlueprintName = "MimiRemoteUITests"
                ReferencedContainer = "container:MimiRemote.xcodeproj">
@@ -72,7 +71,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "125BCE4367937D9DC555C549"
-            BuildableName = "MimiRemote.app"
+            BuildableName = "mimitag.app"
             BlueprintName = "MimiRemote"
             ReferencedContainer = "container:MimiRemote.xcodeproj">
          </BuildableReference>
@@ -89,7 +88,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "125BCE4367937D9DC555C549"
-            BuildableName = "MimiRemote.app"
+            BuildableName = "mimitag.app"
             BlueprintName = "MimiRemote"
             ReferencedContainer = "container:MimiRemote.xcodeproj">
          </BuildableReference>

@@ -238,7 +238,7 @@ actor CodexAppServerConnection {
         let initializeParams = CodexAppServerJSONValue.objectValue([
             "clientInfo": .object([
                 "name": .string("mimi_remote"),
-                "title": .string("Mimi Remote"),
+                "title": .string("mimitag"),
                 "version": .string("0.1.0")
             ]),
             // app-server 要求客户端声明能力；这里保持最小能力集，避免移动端误触实验外的鉴权路径。

@@ -339,19 +339,19 @@
     "let theme = ThemePreset.%@" : {
       "shouldTranslate" : false
     },
-    "Mimi Remote" : {
+    "mimitag" : {
       "comment" : "Localized product display name used in the app chrome.",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "mimi"
+            "value" : "mimitag"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "mimi"
+            "value" : "mimitag"
           }
         }
       }
@@ -1225,7 +1225,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After refreshing, Mimi Remote shows the rate-limit window reported by Codex."
+            "value" : "After refreshing, mimitag shows the rate-limit window reported by Codex."
           }
         },
         "zh-Hans" : {
@@ -1243,7 +1243,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After refreshing, Mimi Remote shows the rate-limit window reported by %@."
+            "value" : "After refreshing, mimitag shows the rate-limit window reported by %@."
           }
         },
         "zh-Hans" : {
@@ -8632,13 +8632,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enter your tasks below and Mimi Remote retains your current workspace and session context."
+            "value" : "Enter your tasks below and mimitag retains your current workspace and session context."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在下方输入任务，Mimi Remote 会保留当前工作区与会话上下文。"
+            "value" : "在下方输入任务，mimitag 会保留当前工作区与会话上下文。"
           }
         }
       }
@@ -11556,13 +11556,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Install Mimi Remote Mac"
+            "value" : "Install mimitag Mac"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "安装 Mimi Remote Mac"
+            "value" : "安装 mimitag Mac"
           }
         }
       }
@@ -13934,13 +13934,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "mimi"
+            "value" : "mimitag"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "mimi"
+            "value" : "mimitag"
           }
         }
       }
@@ -13951,19 +13951,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote does not have camera access and cannot scan the pairing QR code shown on your Mac."
+            "value" : "mimitag does not have camera access and cannot scan the pairing QR code shown on your Mac."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote 没有相机访问权限，无法扫描 Mac 上显示的配对二维码。"
+            "value" : "mimitag 没有相机访问权限，无法扫描 Mac 上显示的配对二维码。"
           }
         }
       }
     },
     "ui.mimi_remote_connection_accessibility" : {
-      "comment" : "Accessibility label for Mimi Remote connection status. %@ is the status.",
+      "comment" : "Accessibility label for mimitag connection status. %@ is the status.",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -13985,13 +13985,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote is licensed under the GNU GPLv3 and is permitted under Section 7 for distribution through the Apple App Store and Google Play. This program does not provide any form of warranty; when distributing modified versions or binaries, the corresponding source code must still be provided and the equivalent license must be retained."
+            "value" : "mimitag is licensed under the GNU GPLv3 and is permitted under Section 7 for distribution through the Apple App Store and Google Play. This program does not provide any form of warranty; when distributing modified versions or binaries, the corresponding source code must still be provided and the equivalent license must be retained."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote 使用 GNU GPLv3，并依据第 7 节允许通过 Apple App Store 和 Google Play 分发。本程序不提供任何形式的担保；分发修改版或二进制时，仍须提供对应源码并保留同等许可。"
+            "value" : "mimitag 使用 GNU GPLv3，并依据第 7 节允许通过 Apple App Store 和 Google Play 分发。本程序不提供任何形式的担保；分发修改版或二进制时，仍须提供对应源码并保留同等许可。"
           }
         }
       }
@@ -14002,13 +14002,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote Project License"
+            "value" : "mimitag Project License"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote 项目许可"
+            "value" : "mimitag 项目许可"
           }
         }
       }
@@ -26080,13 +26080,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The in-app reminder has been saved; the system notification is not turned on, please turn it on in iOS \"Settings > Notifications > Mimi Remote\""
+            "value" : "The in-app reminder has been saved; the system notification is not turned on, please turn it on in iOS \"Settings > Notifications > mimitag\""
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已保存 App 内提醒；系统通知未开启，请在 iOS“设置 > 通知 > Mimi Remote”中开启"
+            "value" : "已保存 App 内提醒；系统通知未开启，请在 iOS“设置 > 通知 > mimitag”中开启"
           }
         }
       }
@@ -27636,13 +27636,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This session is running in another client. Mimi Remote is currently observing only. Take over on this device to send messages or respond to approvals."
+            "value" : "This session is running in another client. mimitag is currently observing only. Take over on this device to send messages or respond to approvals."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这个会话正在其他客户端运行，Mimi Remote 当前仅观察。在此设备上接管后才能发送消息或处理审批。"
+            "value" : "这个会话正在其他客户端运行，mimitag 当前仅观察。在此设备上接管后才能发送消息或处理审批。"
           }
         }
       }

@@ -1010,7 +1010,7 @@ actor CodexAppServerSessionRuntime {
             && !stateDBOnlyScanRequiredCWDs.contains(cwd)
         let sortKey = preferredThreadListSortKey
         do {
-            let result = try await sendRecoveringFromStaleInitialization(
+            let result = try await sendReadOnlyRecoveringConnection(
                 try builder.threadList(
                     cwd: cwd,
                     limit: limit,
@@ -1071,7 +1071,7 @@ actor CodexAppServerSessionRuntime {
         projects: [AgentProject],
         fallbackProject: AgentProject
     ) async throws -> SessionsPage {
-        let result = try await sendRecoveringFromStaleInitialization(
+        let result = try await sendReadOnlyRecoveringConnection(
             try builder.threadList(
                 cwd: cwd,
                 limit: limit,
@@ -2108,6 +2108,40 @@ actor CodexAppServerSessionRuntime {
                 }
             }
             await retireCurrentConnectionAfterRecoverableError(firstConnection, error: error)
+            throw error
+        }
+    }
+
+    /// 只读 JSON-RPC 在连接级故障时可以安全地在新连接上重试一次。
+    /// 写请求仍使用 sendRecoveringFromStaleInitialization，避免响应丢失时重复产生副作用。
+    func sendReadOnlyRecoveringConnection(
+        _ request: CodexAppServerRequestSpec,
+        timeout: TimeInterval? = nil
+    ) async throws -> CodexAppServerJSONValue? {
+        let firstConnection = try await ensureConnection()
+        do {
+            return try await firstConnection.send(request, timeout: timeout)
+        } catch {
+            if await recoverConnectionAfterStaleInitialization(firstConnection, error: error) {
+                return try await sendReadOnlyRequestOnceAfterRecovery(request, timeout: timeout)
+            }
+            guard isRecoverableConnectionError(error) else {
+                throw error
+            }
+            await retireCurrentConnectionAfterRecoverableError(firstConnection, error: error)
+            return try await sendReadOnlyRequestOnceAfterRecovery(request, timeout: timeout)
+        }
+    }
+
+    func sendReadOnlyRequestOnceAfterRecovery(
+        _ request: CodexAppServerRequestSpec,
+        timeout: TimeInterval?
+    ) async throws -> CodexAppServerJSONValue? {
+        let recoveredConnection = try await ensureConnection()
+        do {
+            return try await recoveredConnection.send(request, timeout: timeout)
+        } catch {
+            await retireCurrentConnectionAfterRecoverableError(recoveredConnection, error: error)
             throw error
         }
     }

@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "125BCE4367937D9DC555C549"
-               BuildableName = "MimiRemote.app"
+               BuildableName = "mimitag.app"
                BlueprintName = "MimiRemote"
                ReferencedContainer = "container:MimiRemote.xcodeproj">
             </BuildableReference>
@@ -73,7 +73,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "125BCE4367937D9DC555C549"
-            BuildableName = "MimiRemote.app"
+            BuildableName = "mimitag.app"
             BlueprintName = "MimiRemote"
             ReferencedContainer = "container:MimiRemote.xcodeproj">
          </BuildableReference>
@@ -90,7 +90,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "125BCE4367937D9DC555C549"
-            BuildableName = "MimiRemote.app"
+            BuildableName = "mimitag.app"
             BlueprintName = "MimiRemote"
             ReferencedContainer = "container:MimiRemote.xcodeproj">
          </BuildableReference>
