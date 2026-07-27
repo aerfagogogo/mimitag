@@ -7,16 +7,19 @@
 //! cwd `/Users/sigkitten/dev/alleycat` becomes
 //! `-Users-sigkitten-dev-alleycat`.
 //!
-//! Each `<session_id>.jsonl` is tolerated permissively: we read the first
-//! `user` record's text content for `first_message`, and use file `created`
-//! /`modified` mtimes as fallbacks when the JSONL has no parseable
-//! timestamps. Files that fail to open or parse are skipped quietly.
+//! Each `<session_id>.jsonl` is tolerated permissively: we read the first real
+//! user message for `first_message`, skipping Claude CLI metadata, local
+//! commands, and tool-result-only records. Files without a real user message,
+//! or that fail to open or parse, are skipped quietly.
 
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::fs;
+
+use crate::translate::items::is_internal_local_command_text;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaudeSessionInfo {
@@ -125,7 +128,8 @@ async fn build_session_info(path: &Path) -> Option<ClaudeSessionInfo> {
 
     let text = fs::read_to_string(path).await.ok()?;
     let mut cwd = String::new();
-    let mut first_message = String::new();
+    let mut first_message: Option<String> = None;
+    let mut found_real_user_message = false;
     let mut first_message_ts: Option<DateTime<Utc>> = None;
     for line in text.lines() {
         let trimmed = line.trim();
@@ -141,21 +145,10 @@ async fn build_session_info(path: &Path) -> Option<ClaudeSessionInfo> {
                 cwd = c.to_string();
             }
         }
-        if first_message.is_empty() && value.get("type").and_then(|v| v.as_str()) == Some("user") {
-            if let Some(content) = value.get("message").and_then(|m| m.get("content")) {
-                if let Some(s) = content.as_str() {
-                    first_message = s.lines().next().unwrap_or("").to_string();
-                } else if let Some(arr) = content.as_array() {
-                    for entry in arr {
-                        if entry.get("type").and_then(|t| t.as_str()) == Some("text") {
-                            if let Some(t) = entry.get("text").and_then(|v| v.as_str()) {
-                                first_message = t.lines().next().unwrap_or("").to_string();
-                                break;
-                            }
-                        }
-                    }
-                }
-                if first_message_ts.is_none() {
+        if first_message.is_none() {
+            if let Some(message) = first_real_user_message(&value) {
+                if !found_real_user_message {
+                    found_real_user_message = true;
                     if let Some(ts) = value
                         .get("timestamp")
                         .and_then(|v| v.as_str())
@@ -164,16 +157,19 @@ async fn build_session_info(path: &Path) -> Option<ClaudeSessionInfo> {
                         first_message_ts = Some(ts.with_timezone(&Utc));
                     }
                 }
+                if let RealUserMessage::Titled(preview) = message {
+                    first_message = Some(preview);
+                }
             }
         }
-        if !cwd.is_empty() && !first_message.is_empty() {
+        if !cwd.is_empty() && first_message.is_some() {
             break;
         }
     }
 
     let created = first_message_ts.unwrap_or(created);
-    if first_message.is_empty() {
-        first_message = "(no messages)".to_string();
+    if !found_real_user_message {
+        return None;
     }
     Some(ClaudeSessionInfo {
         path: path.to_path_buf(),
@@ -181,8 +177,67 @@ async fn build_session_info(path: &Path) -> Option<ClaudeSessionInfo> {
         cwd,
         created,
         modified,
-        first_message,
+        first_message: first_message.unwrap_or_default(),
     })
+}
+
+/// 提取会话标题时只认真实用户文本。Claude 会把 `/model` 等本地命令、
+/// caveat 元消息和工具结果都写成顶层 `type=user`，不能据此直接判断用户发过消息。
+fn first_real_user_message(value: &Value) -> Option<RealUserMessage> {
+    if value.get("type").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    let is_meta = value
+        .get("isMeta")
+        .or_else(|| value.get("is_meta"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if is_meta {
+        return None;
+    }
+
+    let content = value.get("message")?.get("content")?;
+    if let Some(text) = content.as_str() {
+        return real_message_preview(text).map(RealUserMessage::Titled);
+    }
+    let entries = content.as_array()?;
+    for entry in entries {
+        if entry.get("type").and_then(Value::as_str) == Some("text") {
+            if let Some(preview) = entry
+                .get("text")
+                .and_then(Value::as_str)
+                .and_then(real_message_preview)
+            {
+                return Some(RealUserMessage::Titled(preview));
+            }
+        }
+    }
+
+    // 图片等非文本输入是真实会话，只是没有可用标题；纯 tool_result 仍视为内部记录。
+    entries
+        .iter()
+        .any(|entry| {
+            matches!(
+                entry.get("type").and_then(Value::as_str),
+                Some("image" | "image_url" | "document")
+            )
+        })
+        .then_some(RealUserMessage::Untitled)
+}
+
+enum RealUserMessage {
+    Titled(String),
+    Untitled,
+}
+
+fn real_message_preview(text: &str) -> Option<String> {
+    if is_internal_local_command_text(text) {
+        return None;
+    }
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]
@@ -244,7 +299,61 @@ mod tests {
         )
         .unwrap();
         let sessions = list_sessions_from_dir(dir.path()).await;
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn skips_internal_user_records_before_first_real_message() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("internal-before-real.jsonl");
+        let records = [
+            r#"{"type":"user","isMeta":true,"cwd":"/private/tmp","message":{"role":"user","content":"<local-command-caveat>internal</local-command-caveat>"},"timestamp":"2026-07-17T05:11:50Z"}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>"},"timestamp":"2026-07-17T05:11:51Z"}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"done"}]},"timestamp":"2026-07-17T05:11:52Z"}"#,
+            r#"{"type":"user","message":{"role":"user","content":"\n  真正的用户消息\n第二行"},"timestamp":"2026-07-17T05:11:53Z"}"#,
+        ];
+        std::fs::write(&path, records.join("\n")).unwrap();
+
+        let sessions = list_sessions_from_dir(dir.path()).await;
+
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].first_message, "(no messages)");
+        assert_eq!(sessions[0].first_message, "真正的用户消息");
+        assert_eq!(
+            sessions[0].created,
+            DateTime::parse_from_rfc3339("2026-07-17T05:11:53Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_session_with_only_internal_user_records() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("internal-only.jsonl");
+        let records = [
+            r#"{"type":"user","isMeta":true,"cwd":"/private/tmp","message":{"role":"user","content":"metadata"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>done</local-command-stdout>"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"done"}]}}"#,
+        ];
+        std::fs::write(&path, records.join("\n")).unwrap();
+
+        assert!(list_sessions_from_dir(dir.path()).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn keeps_image_only_user_session_without_inventing_a_title() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("image-only.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","cwd":"/private/tmp","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]},"timestamp":"2026-07-17T05:11:53Z"}"#,
+        )
+        .unwrap();
+
+        let sessions = list_sessions_from_dir(dir.path()).await;
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "image-only");
+        assert!(sessions[0].first_message.is_empty());
     }
 }

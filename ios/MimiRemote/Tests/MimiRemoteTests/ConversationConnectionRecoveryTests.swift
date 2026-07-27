@@ -640,6 +640,142 @@ extension ConversationDataFlowTests {
         XCTAssertNil(store.errorMessage)
     }
 
+    func testRefreshAllLateResponseDoesNotReplaceNewSelectionInSameProject() async {
+        let project = makeProject(id: "proj_refresh_selection_lease")
+        let first = makeSession(
+            id: "thread_refresh_first",
+            projectID: project.id,
+            title: "A",
+            status: "history",
+            source: "codex"
+        )
+        let second = makeSession(
+            id: "thread_refresh_second",
+            projectID: project.id,
+            title: "B",
+            status: "history",
+            source: "codex"
+        )
+        let client = BlockingSessionListRefreshClient(
+            projects: [project],
+            page: SessionsPage(sessions: [first, second])
+        )
+        let socket = MockWebSocketClient()
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: { socket }
+        )
+        store.selectedProjectID = project.id
+        await store.refreshAll(autoAttach: false)
+        await store.selectSession(first)
+
+        let refreshTask = Task { await store.refreshAll(autoAttach: true) }
+        await client.waitForBlockedSessionListRefresh()
+        await store.selectSession(second)
+        client.releaseBlockedSessionListRefresh()
+        await refreshTask.value
+
+        XCTAssertEqual(store.selectedProjectID, project.id)
+        XCTAssertEqual(store.selectedSessionID, second.id)
+        XCTAssertEqual(store.connectedSessionID, second.id)
+        XCTAssertEqual(socket.connectedSessionIDs.last, second.id)
+    }
+
+    func testRefreshAllLateResponseMergesOldProjectWithoutReplacingNewProjectSelection() async {
+        let firstProject = makeProject(id: "proj_refresh_old")
+        let secondProject = makeProject(id: "proj_refresh_new")
+        let first = makeSession(
+            id: "thread_refresh_old",
+            projectID: firstProject.id,
+            title: "A",
+            status: "history",
+            source: "codex"
+        )
+        let second = makeSession(
+            id: "thread_refresh_new",
+            projectID: secondProject.id,
+            title: "B",
+            status: "history",
+            source: "codex"
+        )
+        let client = BlockingSessionListRefreshClient(
+            projects: [firstProject, secondProject],
+            page: SessionsPage(sessions: [first])
+        )
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: { MockWebSocketClient() }
+        )
+        store.selectedProjectID = firstProject.id
+        await store.refreshAll(autoAttach: false)
+        _ = store.ensureWorkspace(for: secondProject)
+        store.upsert(second)
+        await store.selectSession(first)
+
+        let refreshTask = Task { await store.refreshAll(autoAttach: true) }
+        await client.waitForBlockedSessionListRefresh()
+        await store.selectSession(second)
+        client.releaseBlockedSessionListRefresh()
+        await refreshTask.value
+
+        XCTAssertEqual(store.selectedProjectID, secondProject.id)
+        XCTAssertEqual(store.selectedSessionID, second.id)
+        XCTAssertEqual(store.connectedSessionID, second.id)
+        XCTAssertTrue(store.sessions.contains { $0.id == first.id })
+    }
+
+    func testForegroundResumeLateRefreshKeepsUserSelectionAndSocket() async {
+        let project = makeProject(id: "proj_foreground_selection_lease")
+        let first = makeSession(
+            id: "thread_foreground_first",
+            projectID: project.id,
+            title: "A",
+            status: "history",
+            source: "codex"
+        )
+        let second = makeSession(
+            id: "thread_foreground_second",
+            projectID: project.id,
+            title: "B",
+            status: "history",
+            source: "codex"
+        )
+        let client = BlockingSessionListRefreshClient(
+            projects: [project],
+            page: SessionsPage(sessions: [first, second])
+        )
+        let appStore = AppStore()
+        appStore.token = "test-token"
+        let socket = MockWebSocketClient()
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: { socket }
+        )
+        store.selectedProjectID = project.id
+        await store.refreshAll(autoAttach: false)
+        await store.selectSession(first)
+        store.suspendForBackground()
+
+        let resumeTask = Task { await store.resumeFromForeground() }
+        await client.waitForBlockedSessionListRefresh()
+        await store.selectSession(second)
+        client.releaseBlockedSessionListRefresh()
+        await resumeTask.value
+
+        XCTAssertEqual(store.selectedSessionID, second.id)
+        XCTAssertEqual(store.connectedSessionID, second.id)
+        XCTAssertEqual(socket.connectedSessionIDs.last, second.id)
+    }
+
     func testBootstrapHonorsThreadListRetryAfterBeforeRetrying() async {
         let project = makeProject(id: "proj_list_retry_after")
         let session = makeSession(id: "thread_list_retry_after", projectID: project.id, title: "限流恢复", status: "history", source: "codex")
@@ -797,6 +933,44 @@ extension ConversationDataFlowTests {
 
         XCTAssertEqual(client.sessionsPageCallCount, 1)
         XCTAssertEqual(store.filteredSessions.map(\.id), [session.id])
+    }
+
+    func testSessionLibrarySerializesBackgroundWorkspaceRequests() async throws {
+        let firstProject = makeProject(id: "proj_library_serial_first")
+        let secondProject = makeProject(id: "proj_library_serial_second")
+        let client = BlockingSessionListRefreshClient(
+            projects: [firstProject, secondProject],
+            page: SessionsPage(sessions: []),
+            blockOnCall: 1
+        )
+        let appStore = AppStore()
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            recentWorkspaceStore: makeRecentWorkspaceStore(
+                workspaces: [
+                    AgentWorkspace(project: firstProject),
+                    AgentWorkspace(project: secondProject)
+                ],
+                endpoint: appStore.endpoint
+            ),
+            clientFactory: { client }
+        )
+        store.reloadRecentWorkspaces()
+
+        let refreshTask = Task { await store.refreshSessionLibraryIndex() }
+        await client.waitForBlockedSessionListRefresh()
+        try await Task.sleep(nanoseconds: 80_000_000)
+        XCTAssertEqual(client.sessionsPageCallCount, 1, "第一条后台 thread/list 未完成前不应启动第二条")
+
+        client.releaseBlockedSessionListRefresh()
+        for _ in 0..<100 where client.sessionsPageCallCount < 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(client.sessionsPageCallCount, 2)
+        client.releaseBlockedSessionListRefresh()
+        await refreshTask.value
     }
 
     func testRecentSessionsUsesLatestActivityAcrossEveryWorkspace() async {
@@ -1006,6 +1180,270 @@ extension ConversationDataFlowTests {
         XCTAssertFalse(rejectedCustom)
         XCTAssertFalse(rejectedRunning)
         XCTAssertEqual(client.requestedSessionReviews.count, 2)
+    }
+
+    func testRecoveryGenerationFailureDoesNotReuseOlderFullSnapshot() async {
+        let project = makeProject(id: "proj_recovery_failed_history")
+        let session = makeSession(
+            id: "thread_recovery_failed_history",
+            projectID: project.id,
+            title: "恢复历史失败",
+            status: SessionStatus.running.rawValue,
+            source: "codex"
+        )
+        let client = MockSessionStoreClient(
+            projects: [project],
+            sessions: [session],
+            messagesError: AgentAPIError.server(status: 504, message: "thread/read timeout")
+        )
+        let conversationStore = ConversationStore()
+        conversationStore.replaceHistorySnapshot([
+            CodexHistoryMessage(
+                role: "assistant",
+                content: "旧的完整历史快照",
+                createdAt: Date(timeIntervalSince1970: 1)
+            )
+        ], sessionID: session.id)
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: conversationStore,
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+        store.sessions = [session]
+        store.historyLoadedQualityBySessionID[session.id] = .full
+
+        let generation = store.beginRecoveryHistoryGeneration()
+        let firstResult = await store.reconcileHistoryForRecovery(
+            sessionID: session.id,
+            generation: generation
+        )
+        let repeatedResult = await store.reconcileHistoryForRecovery(
+            sessionID: session.id,
+            generation: generation
+        )
+
+        XCTAssertFalse(firstResult)
+        XCTAssertFalse(repeatedResult, "本代 thread/read 失败后不能复用旧 full snapshot 冒充成功")
+        XCTAssertEqual(client.requestedMessageSessionIDs, [session.id], "同一恢复代次只强制对账一次")
+    }
+
+    func testRecoveryEconomyFallbackKeepsFullReplayEnabled() async {
+        let project = makeProject(id: "proj_recovery_economy_fallback")
+        let session = makeSession(
+            id: "thread_recovery_economy_fallback",
+            projectID: project.id,
+            title: "恢复时完整历史过大",
+            status: SessionStatus.running.rawValue,
+            source: "claude",
+            runtimeProvider: "claude"
+        )
+        let client = OrderedHistoryPageClient(
+            projects: [project],
+            page: SessionsPage(sessions: [session])
+        )
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+        store.sessions = [session]
+
+        let generation = store.beginRecoveryHistoryGeneration()
+        let recovery = Task {
+            await store.reconcileHistoryForRecovery(
+                sessionID: session.id,
+                generation: generation
+            )
+        }
+        await client.waitForHistoryRequestCount(1)
+        client.failHistoryRequest(
+            at: 0,
+            with: historyPolicyError(reason: "history_response_too_large")
+        )
+        await client.waitForHistoryRequestCount(2)
+        client.resolveHistoryRequest(
+            at: 1,
+            with: HistoryMessagesPage(
+                messages: [
+                    CodexHistoryMessage(
+                        id: "economy-only",
+                        role: "assistant",
+                        content: "缩略结果",
+                        createdAt: Date(timeIntervalSince1970: 20)
+                    )
+                ],
+                loadMode: .economy
+            )
+        )
+
+        let recoveredFullHistory = await recovery.value
+        XCTAssertFalse(
+            recoveredFullHistory,
+            "economy 只用于界面兜底，不能证明 detached 期间的完整内容已对账"
+        )
+        XCTAssertEqual(client.requestedMessageLoadModes, [.full, .economy])
+    }
+
+    func testRecoveryForceLoadReplacesOlderReuseRecentRequest() async {
+        let project = makeProject(id: "proj_recovery_replaces_cached_job")
+        let session = makeSession(
+            id: "thread_recovery_replaces_cached_job",
+            projectID: project.id,
+            title: "恢复请求换代",
+            status: SessionStatus.running.rawValue,
+            source: "claude",
+            runtimeProvider: "claude"
+        )
+        let client = OrderedHistoryPageClient(
+            projects: [project],
+            page: SessionsPage(sessions: [session])
+        )
+        let conversationStore = ConversationStore()
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: conversationStore,
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+        store.sessions = [session]
+
+        let olderLoad = Task {
+            await store.loadHistory(
+                for: session,
+                quiet: true,
+                loadMode: .full,
+                force: false
+            )
+        }
+        await client.waitForHistoryRequestCount(1)
+
+        let generation = store.beginRecoveryHistoryGeneration()
+        let recovery = Task {
+            await store.reconcileHistoryForRecovery(
+                sessionID: session.id,
+                generation: generation
+            )
+        }
+        await client.waitForHistoryRequestCount(2)
+        XCTAssertEqual(client.requestedMessageLoadModes, [.full, .full])
+
+        client.resolveHistoryRequest(
+            at: 1,
+            with: HistoryMessagesPage(messages: [
+                CodexHistoryMessage(
+                    id: "new-authoritative",
+                    role: "assistant",
+                    content: "恢复时的新权威结果",
+                    createdAt: Date(timeIntervalSince1970: 30)
+                )
+            ])
+        )
+        let recovered = await recovery.value
+        XCTAssertTrue(recovered)
+
+        client.resolveHistoryRequest(
+            at: 0,
+            with: HistoryMessagesPage(messages: [
+                CodexHistoryMessage(
+                    id: "older-cached",
+                    role: "assistant",
+                    content: "恢复前的旧快照",
+                    createdAt: Date(timeIntervalSince1970: 10)
+                )
+            ])
+        )
+        let olderLoaded = await olderLoad.value
+        XCTAssertTrue(
+            olderLoaded,
+            "旧 waiter 可复用已完成的新权威快照，但它自己的迟到响应不能覆盖界面"
+        )
+        XCTAssertEqual(
+            conversationStore.messages(for: session.id).map(\.content),
+            ["恢复时的新权威结果"]
+        )
+    }
+
+    func testNewRecoveryGenerationReplacesOlderEconomyFallback() async {
+        let project = makeProject(id: "proj_recovery_replaces_old_economy")
+        let session = makeSession(
+            id: "thread_recovery_replaces_old_economy",
+            projectID: project.id,
+            title: "恢复代次跨模式换代",
+            status: SessionStatus.running.rawValue,
+            source: "claude",
+            runtimeProvider: "claude"
+        )
+        let client = OrderedHistoryPageClient(
+            projects: [project],
+            page: SessionsPage(sessions: [session])
+        )
+        let conversationStore = ConversationStore()
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: conversationStore,
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+        store.sessions = [session]
+        store.historyLoadedQualityBySessionID[session.id] = .full
+
+        let olderGeneration = store.beginRecoveryHistoryGeneration()
+        let olderEconomy = Task {
+            await store.loadHistory(
+                for: session,
+                quiet: true,
+                loadMode: .economy,
+                force: true,
+                recoveryGeneration: olderGeneration
+            )
+        }
+        await client.waitForHistoryRequestCount(1)
+
+        let currentGeneration = store.beginRecoveryHistoryGeneration()
+        let currentRecovery = Task {
+            await store.reconcileHistoryForRecovery(
+                sessionID: session.id,
+                generation: currentGeneration
+            )
+        }
+        await client.waitForHistoryRequestCount(2)
+        XCTAssertEqual(client.requestedMessageLoadModes, [.economy, .full])
+
+        client.resolveHistoryRequest(
+            at: 1,
+            with: HistoryMessagesPage(messages: [
+                CodexHistoryMessage(
+                    id: "new-full",
+                    role: "assistant",
+                    content: "新代完整权威历史",
+                    createdAt: Date(timeIntervalSince1970: 40)
+                )
+            ])
+        )
+        let recoveredCurrentGeneration = await currentRecovery.value
+        XCTAssertTrue(recoveredCurrentGeneration)
+
+        client.resolveHistoryRequest(
+            at: 0,
+            with: HistoryMessagesPage(
+                messages: [
+                    CodexHistoryMessage(
+                        id: "old-economy",
+                        role: "assistant",
+                        content: "旧代缩略历史",
+                        createdAt: Date(timeIntervalSince1970: 20)
+                    )
+                ],
+                loadMode: .economy
+            )
+        )
+        _ = await olderEconomy.value
+        XCTAssertEqual(
+            conversationStore.messages(for: session.id).map(\.content),
+            ["新代完整权威历史"]
+        )
     }
 
     func testMultiRuntimeHistoryPreservesEconomyAndFullLoadModes() async throws {

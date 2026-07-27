@@ -155,21 +155,44 @@ pub fn records_to_turns(records: &[OnDiskRecord]) -> Vec<Turn> {
     let mut builder = TurnBuilder::default();
     for record in records {
         match record.classify() {
-            ClassifiedRecord::User { ts, content } => {
+            ClassifiedRecord::User {
+                ts,
+                content,
+                prompt_id,
+            } => {
                 builder.flush_assistants();
                 if let Some(true) = builder.try_fold_tool_results(&content, &record.tool_use_result)
                 {
                     builder.current_completed_at = Some(ts);
+                    if prompt_id.is_some() {
+                        builder.current_prompt_id = prompt_id;
+                    }
                     continue;
                 }
                 builder.push_turn();
                 builder.tool_call_index.clear();
+                builder.current_prompt_id = prompt_id;
                 builder.current_started_at = Some(ts);
                 builder.current_completed_at = Some(ts);
                 let turn_index = builder.turns.len();
                 builder
                     .current_items
                     .push(user_message_to_item(&content, ts, turn_index));
+            }
+            ClassifiedRecord::MetaUser { ts, prompt_id } => {
+                // 附件尺寸等内部 meta record 会复用当前 promptId，仍属于当前 turn。
+                // ScheduleWakeup 的重新唤醒会生成新的 promptId，才是真正的自主 turn。
+                if prompt_id.is_some() && prompt_id == builder.current_prompt_id {
+                    continue;
+                }
+                // ScheduleWakeup/后台继续等隐藏 user record 不应显示成用户消息，但它
+                // 确实开启了一个自主 turn。先收口上一轮，避免延迟回复并入旧 turn。
+                builder.flush_assistants();
+                builder.push_turn();
+                builder.tool_call_index.clear();
+                builder.current_prompt_id = prompt_id;
+                builder.current_started_at = Some(ts);
+                builder.current_completed_at = Some(ts);
             }
             ClassifiedRecord::AssistantBlocks { id, ts, blocks } => {
                 builder.append_assistant_blocks(id, ts, blocks);
@@ -188,6 +211,7 @@ struct TurnBuilder {
     current_items: Vec<ThreadItem>,
     current_started_at: Option<i64>,
     current_completed_at: Option<i64>,
+    current_prompt_id: Option<String>,
     assistant_chunks: HashMap<String, MergedAssistant>,
     assistant_order: Vec<String>,
     tool_call_index: HashMap<String, usize>,
@@ -290,6 +314,9 @@ fn user_message_to_item(content: &Value, ts: i64, turn_index: usize) -> ThreadIt
     ThreadItem::UserMessage {
         id: format!("user_{turn_index}_{ts}"),
         content: inputs,
+        // Claude JSONL 不保存 App 生成的 clientUserMessageId；服务重启后的旧历史
+        // 由 iOS 的受限语义兜底合并，运行中的 live cache 则会保留该稳定 ID。
+        client_id: None,
     }
 }
 
@@ -353,6 +380,12 @@ fn is_internal_local_command_content(content: &Value) -> bool {
     let Some(text) = content.as_str() else {
         return false;
     };
+    is_internal_local_command_text(text)
+}
+
+/// Claude CLI 内部命令会伪装成 user 文本；索引扫描和历史翻译必须复用同一判定，
+/// 否则列表标题会展示 `<local-command-*>`，打开后又因为历史层过滤而看起来像空会话。
+pub(crate) fn is_internal_local_command_text(text: &str) -> bool {
     let text = text.trim();
     is_complete_reserved_tag(text, "local-command-caveat")
         || is_complete_reserved_tag(text, "local-command-stdout")
@@ -942,15 +975,33 @@ pub struct OnDiskRecord {
     pub timestamp: Option<String>,
     #[serde(default)]
     pub uuid: Option<String>,
+    /// 同一 Claude prompt 产生的普通 user/tool-result/meta 记录共享该 id；
+    /// ScheduleWakeup 重新唤醒时会换新 id，可据此区分自主 turn 与附件元数据。
+    #[serde(default)]
+    pub prompt_id: Option<String>,
     /// Claude Code 标记的内部提示，例如 local-command caveat。
     #[serde(default)]
     pub is_meta: bool,
+    /// 工具/Skill 注入的 meta user record 仍属于当前 turn；没有来源 tool id
+    /// 的 meta user record 才代表后台自主 turn 的隐藏触发边界。
+    #[serde(
+        default,
+        rename = "sourceToolUseID",
+        alias = "sourceToolUseId",
+        alias = "source_tool_use_id"
+    )]
+    pub source_tool_use_id: Option<String>,
 }
 
 enum ClassifiedRecord {
     User {
         ts: i64,
         content: Value,
+        prompt_id: Option<String>,
+    },
+    MetaUser {
+        ts: i64,
+        prompt_id: Option<String>,
     },
     AssistantBlocks {
         id: String,
@@ -970,9 +1021,6 @@ impl OnDiskRecord {
             .unwrap_or(0);
         match self.record_type.as_str() {
             "user" => {
-                if self.is_meta {
-                    return ClassifiedRecord::Skip;
-                }
                 let Some(message) = &self.message else {
                     return ClassifiedRecord::Skip;
                 };
@@ -980,7 +1028,21 @@ impl OnDiskRecord {
                 if is_internal_local_command_content(&content) {
                     return ClassifiedRecord::Skip;
                 }
-                ClassifiedRecord::User { ts, content }
+                if self.is_meta {
+                    return if self.source_tool_use_id.is_some() {
+                        ClassifiedRecord::Skip
+                    } else {
+                        ClassifiedRecord::MetaUser {
+                            ts,
+                            prompt_id: self.prompt_id.clone(),
+                        }
+                    };
+                }
+                ClassifiedRecord::User {
+                    ts,
+                    content,
+                    prompt_id: self.prompt_id.clone(),
+                }
             }
             "assistant" => {
                 let Some(message) = &self.message else {
@@ -1127,6 +1189,146 @@ mod tests {
             },
             other => panic!("expected UserMessage, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn hidden_scheduled_wakeup_starts_an_autonomous_turn() {
+        let records = vec![
+            record(json!({
+                "type": "user",
+                "promptId": "prompt-original",
+                "message": {"role": "user", "content": "五分钟后回复我"},
+                "timestamp": "2026-07-26T14:02:00Z",
+                "uuid": "user-1"
+            })),
+            record(json!({
+                "type": "assistant",
+                "message": {
+                    "id": "ack",
+                    "content": [{"type": "text", "text": "好的，已经排程"}]
+                },
+                "timestamp": "2026-07-26T14:02:01Z"
+            })),
+            record(json!({
+                "type": "user",
+                "isMeta": true,
+                "promptId": "prompt-wakeup",
+                "message": {"role": "user", "content": "Scheduled wakeup fired"},
+                "timestamp": "2026-07-26T14:06:06Z",
+                "uuid": "autonomous-trigger"
+            })),
+            record(json!({
+                "type": "assistant",
+                "message": {
+                    "id": "delayed",
+                    "content": [{"type": "text", "text": "⏰ 五分钟到了，当前时间 14:06:06"}]
+                },
+                "timestamp": "2026-07-26T14:06:08Z"
+            })),
+        ];
+
+        let turns = records_to_turns(&records);
+        assert_eq!(turns.len(), 2);
+        assert!(
+            turns[0]
+                .items
+                .iter()
+                .any(|item| matches!(item, ThreadItem::UserMessage { .. }))
+        );
+        assert!(
+            !turns[1]
+                .items
+                .iter()
+                .any(|item| matches!(item, ThreadItem::UserMessage { .. }))
+        );
+        assert!(turns[1].items.iter().any(
+            |item| matches!(item, ThreadItem::AgentMessage { text, .. } if text.contains("14:06:06"))
+        ));
+    }
+
+    #[test]
+    fn image_metadata_with_same_prompt_id_does_not_split_turn() {
+        let records = vec![
+            record(json!({
+                "type": "user",
+                "promptId": "prompt-with-image",
+                "message": {"role": "user", "content": "看下这张图"},
+                "timestamp": "2026-07-26T14:02:00Z",
+                "uuid": "user-1"
+            })),
+            record(json!({
+                "type": "user",
+                "isMeta": true,
+                "promptId": "prompt-with-image",
+                "message": {
+                    "role": "user",
+                    "content": "[Image: original 2048x1536, displayed at 1024x768]"
+                },
+                "timestamp": "2026-07-26T14:02:00Z",
+                "uuid": "image-dimensions"
+            })),
+            record(json!({
+                "type": "assistant",
+                "message": {
+                    "id": "answer",
+                    "content": [{"type": "text", "text": "图片已收到"}]
+                },
+                "timestamp": "2026-07-26T14:02:02Z"
+            })),
+        ];
+
+        let turns = records_to_turns(&records);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0]
+                .items
+                .iter()
+                .filter(|item| matches!(item, ThreadItem::UserMessage { .. }))
+                .count(),
+            1
+        );
+        assert!(turns[0].items.iter().any(
+            |item| matches!(item, ThreadItem::AgentMessage { text, .. } if text == "图片已收到")
+        ));
+    }
+
+    #[test]
+    fn tool_sourced_meta_record_does_not_split_the_current_turn() {
+        let records = vec![
+            record(json!({
+                "type": "user",
+                "message": {"role": "user", "content": "执行 Skill"},
+                "timestamp": "2026-07-26T14:02:00Z",
+                "uuid": "user-1"
+            })),
+            record(json!({
+                "type": "user",
+                "isMeta": true,
+                "sourceToolUseID": "toolu_1",
+                "message": {"role": "user", "content": "Skill 内部上下文"},
+                "timestamp": "2026-07-26T14:02:01Z",
+                "uuid": "skill-context"
+            })),
+            record(json!({
+                "type": "assistant",
+                "message": {
+                    "id": "answer",
+                    "content": [{"type": "text", "text": "执行完成"}]
+                },
+                "timestamp": "2026-07-26T14:02:02Z"
+            })),
+        ];
+
+        let turns = records_to_turns(&records);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0]
+                .items
+                .iter()
+                .filter(|item| matches!(item, ThreadItem::UserMessage { .. }))
+                .count(),
+            1
+        );
     }
 
     #[test]

@@ -23,18 +23,24 @@ extension SessionStore {
         payload: CodexAppServerTurnPayload,
         resume: AgentSession?,
         clientMessageID: ClientMessageID? = nil,
-        initialGoalObjective: String? = nil
+        initialGoalObjective: String? = nil,
+        ifCurrent expectedSelectionLease: SessionSelectionLease? = nil
     ) async -> Bool {
+        let createIntent = expectedSelectionLease ?? reserveSelectionIntent()
         // 空会话只执行 thread/start，没有 turn/start；提前拉 model/list 既不会影响线程创建，
         // 还会在远程链路上平白增加一次串行往返。只有真正要发送首轮输入时才解析模型。
         let payload = payload.isEmpty ? payload : await payloadResolvingRequiredModel(payload)
         if !payload.isEmpty, let notice = selectedQuotaNotice, notice.blocksSending {
-            setErrorMessage(notice.message)
+            if isSelectionLeaseCurrent(createIntent) {
+                setErrorMessage(notice.message)
+            }
             return false
         }
         var projectID = projectID
         guard let workspace = ensureWorkspaceForKnownProjectID(projectID) else {
-            setErrorMessage(L10n.text("ui.the_workspace_has_expired_please_reopen_it"))
+            if isSelectionLeaseCurrent(createIntent) {
+                setErrorMessage(L10n.text("ui.the_workspace_has_expired_please_reopen_it"))
+            }
             return false
         }
         projectID = workspace.id
@@ -47,6 +53,7 @@ extension SessionStore {
             clientMessageID: clientMessageID,
             prompt: prompt
         ) ?? (resume == nil && payload.isEmpty ? "local:\(projectID):\(UUID().uuidString)" : nil)
+        var optimisticSelectionLease: SessionSelectionLease?
         if let optimisticSessionID {
             // 空会话也先发布本地占位，让 UI 立即离开创建弹窗；带首轮输入时继续用
             // client_message_id 合并本地气泡，服务端确认后再迁移到真实 session_id。
@@ -58,8 +65,12 @@ extension SessionStore {
                     runtimeProvider: payload.options.runtimeProvider
                 ))
             }
-            setSelectedProjectID(projectID)
-            setSelectedSessionID(optimisticSessionID)
+            optimisticSelectionLease = commitSelection(
+                projectID: projectID,
+                sessionID: optimisticSessionID,
+                reason: .userOpen,
+                ifCurrent: createIntent
+            )
             insertExpandedProjectID(projectID)
             if let clientMessageID {
                 conversationStore.appendLocalUser(prompt, sessionID: optimisticSessionID, clientMessageID: clientMessageID, sendStatus: .sending, turnPayload: payload)
@@ -112,16 +123,39 @@ extension SessionStore {
             }
             upsert(responseSession)
             setSessionControlState(resume == nil ? .ipadOwned : .takenOver, sessionID: responseSession.id)
-            setSelectedProjectID(responseSession.projectID)
-            setSelectedSessionID(responseSession.id)
             insertExpandedProjectID(responseSession.projectID)
+
+            let responseSelectionLease: SessionSelectionLease?
+            if let optimisticSessionID, let optimisticSelectionLease {
+                if optimisticSessionID == responseSession.id {
+                    responseSelectionLease = isSelectionLeaseCurrent(optimisticSelectionLease)
+                        ? optimisticSelectionLease
+                        : nil
+                } else {
+                    responseSelectionLease = replaceSelectionIfCurrent(
+                        from: optimisticSessionID,
+                        to: responseSession,
+                        lease: optimisticSelectionLease
+                    )
+                }
+            } else {
+                responseSelectionLease = commitSelection(
+                    projectID: responseSession.projectID,
+                    sessionID: responseSession.id,
+                    reason: .userOpen,
+                    ifCurrent: createIntent
+                )
+            }
 
             // 历史 resume 必须先补齐上下文，再追加本次用户输入，避免“发完历史没了”；
             // 带首轮 prompt 的新会话也保留 thread/read 快照，用它校准后续事件回放。
             // 新建空交互会话没有历史可补；启动后立刻请求完整历史容易撞上后端 thread/read
             // 初始化窗口并误报“大历史加载失败”，因此只跳过这类空会话的首屏补拉。
             let didLoadInitialHistory: Bool
-            if hasLoadedFullHistorySnapshot(sessionID: responseSession.id) {
+            if responseSelectionLease == nil {
+                // 用户已经切走：保留服务端创建结果和本地投影，历史在再次打开时按需补拉。
+                didLoadInitialHistory = false
+            } else if hasLoadedFullHistorySnapshot(sessionID: responseSession.id) {
                 // 用户刚从历史列表进入时可复用已有快照，避免同一会话立刻再打一次 full。
                 didLoadInitialHistory = true
             } else if resume != nil || !payload.isEmpty {
@@ -159,11 +193,14 @@ extension SessionStore {
             }
             // 历史已成为 canonical 快照后，WS 只需要补连接状态；否则 buffered content replay
             // 会把同一 turn 的过程卡再次 append 到时间线。历史加载失败时仍保留 replay，避免漏消息。
-            let shouldReplayBufferedEvents = resume == nil || !didLoadInitialHistory
-            connectWebSocket(responseSession, replayBufferedEvents: shouldReplayBufferedEvents)
-            // 恢复反馈属于页面生命周期状态，不是服务端 transcript 内容，避免它参与历史排序。
-            setStatusMessage(resume == nil ? L10n.text("ui.session_started") : L10n.text("ui.this_historical_conversation_has_been_continued"))
-            setErrorMessage(nil)
+            if let responseSelectionLease,
+               isSelectionLeaseCurrent(responseSelectionLease) {
+                let shouldReplayBufferedEvents = resume == nil || !didLoadInitialHistory
+                connectWebSocket(responseSession, replayBufferedEvents: shouldReplayBufferedEvents)
+                // 恢复反馈属于页面生命周期状态，不是服务端 transcript 内容，避免它参与历史排序。
+                setStatusMessage(resume == nil ? L10n.text("ui.session_started") : L10n.text("ui.this_historical_conversation_has_been_continued"))
+                setErrorMessage(nil)
+            }
             return true
         } catch {
             if let optimisticSessionID {
@@ -177,7 +214,10 @@ extension SessionStore {
                 }
                 clearForegroundActivity(sessionID: optimisticSessionID)
             }
-            setErrorMessage(error.localizedDescription)
+            if let optimisticSelectionLease,
+               isSelectionLeaseCurrent(optimisticSelectionLease) {
+                setErrorMessage(error.localizedDescription)
+            }
             return false
         }
     }
@@ -226,49 +266,66 @@ extension SessionStore {
         force: Bool = false,
         reason: HistoryLoadReason = .automatic,
         successStatusMessage: String? = nil,
-        allowPolicyRetry: Bool = true
+        allowPolicyRetry: Bool = true,
+        recoveryGeneration: UInt64? = nil
     ) async -> Bool {
         if !force, canReuseLoadedHistory(for: session, loadMode: loadMode) {
             return true
         }
 
         if let existing = historyLoadJobsBySessionID[session.id] {
-            if existing.loadMode == loadMode {
-                // 已有同模式加载时直接等待同一个 job，避免切换/刷新制造重复大包请求。
-                // 前台刷新加入 quiet job 后必须提升共享 job 的反馈级别；否则 quiet waiter
-                // 若先恢复，会先移除 job 并吞掉失败提示，手动刷新只能静默返回 false。
-                if !quiet {
-                    promoteHistoryLoadJobForForegroundReporting(
-                        existing,
-                        sessionID: session.id,
-                        successStatusMessage: successStatusMessage
-                    )
-                    setHistoryLoadProgress(
-                        sessionID: session.id,
-                        title: loadMode == .full ? L10n.text("ui.request_full_history") : L10n.text("ui.request_thumbnail_history"),
-                        fraction: 0.32
-                    )
-                    let didLoad = await awaitHistoryLoadJob(
+            let belongsToOlderRecovery = recoveryGeneration.map {
+                existing.recoveryGeneration != $0
+            } ?? false
+            if belongsToOlderRecovery {
+                // 先比较恢复代次，再比较 full/economy。旧代 full 降级出的 economy
+                // job 也不能让新代 full 恢复直接返回成功。
+                cancelHistoryLoadJob(existing, sessionID: session.id)
+            } else if existing.loadMode == loadMode {
+                if recoveryGeneration != nil && force && existing.cachePolicy != .bypass {
+                    // 只有回前台/网络恢复需要读取“此刻”的权威历史：加入一个更早启动的
+                    // reuseRecent job 可能拿到自主 turn 完成前的快照，因此直接换代。
+                    // 用户手动刷新没有恢复代次，应复用并提升已有 quiet job；否则会制造
+                    // 重复请求，且旧 waiter 可能吞掉本该呈现给用户的失败反馈。
+                    cancelHistoryLoadJob(existing, sessionID: session.id)
+                } else {
+                    // 已有同模式加载时直接等待同一个 job，避免切换/刷新制造重复大包请求。
+                    // 前台刷新加入 quiet job 后必须提升共享 job 的反馈级别；否则 quiet waiter
+                    // 若先恢复，会先移除 job 并吞掉失败提示，手动刷新只能静默返回 false。
+                    if !quiet {
+                        promoteHistoryLoadJobForForegroundReporting(
+                            existing,
+                            sessionID: session.id,
+                            successStatusMessage: successStatusMessage
+                        )
+                        setHistoryLoadProgress(
+                            sessionID: session.id,
+                            title: loadMode == .full ? L10n.text("ui.request_full_history") : L10n.text("ui.request_thumbnail_history"),
+                            fraction: 0.32
+                        )
+                        let didLoad = await awaitHistoryLoadJob(
+                            existing,
+                            session: session,
+                            quiet: false,
+                            successStatusMessage: successStatusMessage
+                        )
+                        clearHistoryLoadProgress(sessionID: session.id)
+                        return didLoad
+                    }
+                    return await awaitHistoryLoadJob(
                         existing,
                         session: session,
-                        quiet: false,
+                        quiet: quiet,
                         successStatusMessage: successStatusMessage
                     )
-                    clearHistoryLoadProgress(sessionID: session.id)
-                    return didLoad
                 }
-                return await awaitHistoryLoadJob(
-                    existing,
-                    session: session,
-                    quiet: quiet,
-                    successStatusMessage: successStatusMessage
-                )
-            }
-            switch reason {
-            case .summaryChoice, .manualFull:
-                cancelHistoryLoadJob(existing, sessionID: session.id)
-            case .automatic:
-                return true
+            } else {
+                switch reason {
+                case .summaryChoice, .manualFull:
+                    cancelHistoryLoadJob(existing, sessionID: session.id)
+                case .automatic:
+                    return true
+                }
             }
         }
 
@@ -289,14 +346,21 @@ extension SessionStore {
             token: jobToken,
             sessionSignature: signature,
             loadMode: loadMode,
+            cachePolicy: cachePolicy,
+            recoveryGeneration: recoveryGeneration,
             allowPolicyRetry: allowPolicyRetry,
             task: task,
             requiresForegroundReporting: !quiet,
-            foregroundSuccessStatusMessage: quiet ? nil : successStatusMessage
+            foregroundSuccessStatusMessage: quiet ? nil : successStatusMessage,
+            foregroundSelectionLease: quiet ? nil : currentSelectionLease()
         )
         historyLoadJobsBySessionID[session.id] = job
         if !quiet {
-            setHistoryLoadNotice(sessionID: session.id, kind: loadMode == .full ? .loadingFull : .loadingSummary)
+            setHistoryLoadNotice(
+                sessionID: session.id,
+                kind: loadMode == .full ? .loadingFull : .loadingSummary,
+                message: loadMode == .economy ? deferredFullHistoryNotice(sessionID: session.id) : nil
+            )
         }
 
         if !quiet {
@@ -323,13 +387,15 @@ extension SessionStore {
             return
         }
         current.requiresForegroundReporting = true
+        current.foregroundSelectionLease = currentSelectionLease()
         if let successStatusMessage {
             current.foregroundSuccessStatusMessage = successStatusMessage
         }
         historyLoadJobsBySessionID[sessionID] = current
         setHistoryLoadNotice(
             sessionID: sessionID,
-            kind: current.loadMode == .full ? .loadingFull : .loadingSummary
+            kind: current.loadMode == .full ? .loadingFull : .loadingSummary,
+            message: current.loadMode == .economy ? deferredFullHistoryNotice(sessionID: sessionID) : nil
         )
     }
 
@@ -390,7 +456,9 @@ extension SessionStore {
             // 当前 job 已被用户选择 summary 或新的刷新取代；旧结果可以完成，但不能覆盖界面。
             return historyLoadedSignatureBySessionID[sessionID] == job.sessionSignature
         }
-        let effectiveQuiet = quiet && !current.requiresForegroundReporting
+        let hasCurrentForegroundOwner = current.foregroundSelectionLease
+            .map(isSelectionLeaseCurrent) ?? false
+        let effectiveQuiet = !current.requiresForegroundReporting || !hasCurrentForegroundOwner
         let effectiveSuccessStatusMessage = current.foregroundSuccessStatusMessage ?? successStatusMessage
         historyLoadJobsBySessionID.removeValue(forKey: sessionID)
         guard isCurrentHistoryPageRequest(sessionID: sessionID, token: result.token) else {
@@ -407,9 +475,19 @@ extension SessionStore {
         historyLoadedSignatureBySessionID[sessionID] = job.sessionSignature
         historyLoadedQualityBySessionID[sessionID] = job.loadMode == .full ? .full : .summary
         if job.loadMode == .full {
+            deferredFullHistorySessionIDs.remove(sessionID)
             historySavingsNoticesBySessionID.removeValue(forKey: sessionID)
         } else if !effectiveQuiet {
-            setHistoryLoadNotice(sessionID: sessionID, kind: .summaryLoaded)
+            setHistoryLoadNotice(
+                sessionID: sessionID,
+                kind: .summaryLoaded,
+                message: deferredFullHistoryNotice(sessionID: sessionID)
+            )
+        }
+        if job.loadMode == .economy {
+            // Turn 可能在 summary 请求尚未返回时就完成；等当前 job 落盘后再补拉 full，
+            // 避免不同模式的并发请求互相抢占并丢失恢复机会。
+            scheduleDeferredFullHistoryReloadAfterTurnCompletion(sessionID: sessionID)
         }
         if let effectiveSuccessStatusMessage {
             setStatusMessage(effectiveSuccessStatusMessage)
@@ -427,7 +505,9 @@ extension SessionStore {
         guard let current = historyLoadJobsBySessionID[sessionID], current.token == job.token else {
             return false
         }
-        let effectiveQuiet = quiet && !current.requiresForegroundReporting
+        let hasCurrentForegroundOwner = current.foregroundSelectionLease
+            .map(isSelectionLeaseCurrent) ?? false
+        let effectiveQuiet = !current.requiresForegroundReporting || !hasCurrentForegroundOwner
         historyLoadJobsBySessionID.removeValue(forKey: sessionID)
         if error is CancellationError {
             return false
@@ -439,7 +519,11 @@ extension SessionStore {
         if let policyFailure = historyPolicyFailure(from: error) {
             switch job.loadMode {
             case .full:
-                let message = L10n.text("ui.the_full_history_content_is_large_and_the")
+                if policyFailure.reason == "history_response_too_large", session.isRunning {
+                    deferredFullHistorySessionIDs.insert(sessionID)
+                }
+                let message = deferredFullHistoryNotice(sessionID: sessionID)
+                    ?? L10n.text("ui.the_full_history_content_is_large_and_the")
                 if !effectiveQuiet {
                     setHistoryLoadNotice(sessionID: sessionID, kind: .loadingSummary, message: message)
                     setStatusMessage(message)
@@ -450,7 +534,8 @@ extension SessionStore {
                     loadMode: .economy,
                     force: true,
                     reason: .automatic,
-                    successStatusMessage: effectiveQuiet ? nil : L10n.text("ui.thumbnail_history_automatically_loaded")
+                    successStatusMessage: effectiveQuiet ? nil : L10n.text("ui.thumbnail_history_automatically_loaded"),
+                    recoveryGeneration: job.recoveryGeneration
                 )
             case .economy where job.allowPolicyRetry:
                 let delay = policyFailure.retryAfterNanoseconds ?? historyPolicyRetryFallbackNanoseconds
@@ -474,7 +559,8 @@ extension SessionStore {
                     force: true,
                     reason: .automatic,
                     successStatusMessage: effectiveQuiet ? nil : L10n.text("ui.thumbnail_history_loaded"),
-                    allowPolicyRetry: false
+                    allowPolicyRetry: false,
+                    recoveryGeneration: job.recoveryGeneration
                 )
             default:
                 break
@@ -598,7 +684,11 @@ extension SessionStore {
         } else {
             retryAfterNanoseconds = nil
         }
-        return HistoryPolicyFailure(retryAfterNanoseconds: retryAfterNanoseconds, retryAfterSeconds: retryAfterSeconds)
+        return HistoryPolicyFailure(
+            reason: reason,
+            retryAfterNanoseconds: retryAfterNanoseconds,
+            retryAfterSeconds: retryAfterSeconds
+        )
     }
 
     func boundedHistoryPolicyRetryNanoseconds(_ nanoseconds: UInt64) -> UInt64 {
@@ -650,6 +740,56 @@ extension SessionStore {
         }
         let message = customMessage ?? defaultMessage
         historySavingsNoticesBySessionID[sessionID] = HistorySavingsNotice(sessionID: sessionID, kind: kind, message: message)
+    }
+
+    func deferredFullHistoryNotice(sessionID: SessionID) -> String? {
+        guard deferredFullHistorySessionIDs.contains(sessionID) else {
+            return nil
+        }
+        return L10n.text("ui.the_full_history_will_be_restored_after_the_current_turn")
+    }
+
+    /// full 响应只在 Turn 运行期间因过程项临时膨胀时才进入该路径。完成事件已经先把
+    /// session 更新为 completed；这里异步补拉，避免历史网络请求阻塞事件队列和完成通知。
+    func scheduleDeferredFullHistoryReloadAfterTurnCompletion(sessionID: SessionID) {
+        guard deferredFullHistorySessionIDs.contains(sessionID),
+              selectedSessionID == sessionID,
+              queuedRunningTurnsBySessionID[sessionID]?.isEmpty != false,
+              historyLoadJobsBySessionID[sessionID] == nil,
+              let session = sessionsByID[sessionID],
+              !session.isRunning
+        else {
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            await Task.yield()
+            guard self.deferredFullHistorySessionIDs.contains(sessionID),
+                  self.selectedSessionID == sessionID,
+                  self.queuedRunningTurnsBySessionID[sessionID]?.isEmpty != false,
+                  self.historyLoadJobsBySessionID[sessionID] == nil,
+                  let latestSession = self.sessionsByID[sessionID],
+                  !latestSession.isRunning
+            else {
+                return
+            }
+            // 发起 canonical full 前移除标记；若完成后的 full 仍然过大，应回到普通缩略提示，
+            // 不能继续声称会在“当前 Turn 完成后”恢复。
+            self.deferredFullHistorySessionIDs.remove(sessionID)
+            let didLoad = await self.loadHistory(
+                for: latestSession,
+                quiet: true,
+                loadMode: .full,
+                force: true,
+                reason: .automatic
+            )
+            if !didLoad,
+               self.historyLoadedQualityBySessionID[sessionID] == .summary {
+                self.setHistoryLoadNotice(sessionID: sessionID, kind: .summaryLoaded)
+            }
+        }
     }
 
     func refreshSelectedSessionContent(
@@ -745,7 +885,11 @@ extension SessionStore {
             historySavingsNoticesBySessionID.removeValue(forKey: sessionID)
             return
         }
-        historySavingsNoticesBySessionID[sessionID] = HistorySavingsNotice(sessionID: sessionID, kind: .summaryLoaded, message: notice)
+        historySavingsNoticesBySessionID[sessionID] = HistorySavingsNotice(
+            sessionID: sessionID,
+            kind: .summaryLoaded,
+            message: deferredFullHistoryNotice(sessionID: sessionID) ?? notice
+        )
     }
 
     func scheduleSessionStateReconciliationAfterHistoryRefresh(_ session: AgentSession) {
@@ -802,11 +946,17 @@ extension SessionStore {
         reportErrorOnFailure: Bool = true,
         reuseRecent: Bool? = nil,
         consistency: SessionListConsistency = .fastIndexed,
-        activatesProject: Bool = true
+        activatesProject: Bool = true,
+        foregroundLease: SessionSelectionLease? = nil
     ) async {
+        let canReportForeground: () -> Bool = {
+            foregroundLease.map(self.isSelectionLeaseCurrent) ?? true
+        }
         var projectID = projectID
         guard let workspace = ensureWorkspaceForKnownProjectID(projectID) else {
-            setErrorMessage(L10n.text("ui.the_workspace_has_expired_please_reopen_it"))
+            if canReportForeground() {
+                setErrorMessage(L10n.text("ui.the_workspace_has_expired_please_reopen_it"))
+            }
             return
         }
         projectID = workspace.id
@@ -842,11 +992,11 @@ extension SessionStore {
             replaceSessionsIfChanged(with: pageSessionsPreservingLoadedWindow(pageSessions, projectID: projectID), projectID: projectID)
             updateSessionPageState(projectID: projectID, page: page)
             clearWorkspaceUnavailable(projectID)
-            if updateStatusMessage {
+            if updateStatusMessage, canReportForeground() {
                 setStatusMessage(L10n.plural("ui.sessions_loaded_count", count: filteredSessions.count))
             }
             // 手动刷新/切换工作区成功时可以清掉旧错误；发送后的后台刷新不能抢掉刚产生的发送失败提示。
-            if clearErrorOnSuccess {
+            if clearErrorOnSuccess, canReportForeground() {
                 setErrorMessage(nil)
             }
         } catch {
@@ -854,7 +1004,11 @@ extension SessionStore {
                 return
             }
             if reportErrorOnFailure, selectedProjectID == projectID {
-                await handleWorkspaceLoadFailure(workspace: workspace, error: error)
+                await handleWorkspaceLoadFailure(
+                    workspace: workspace,
+                    error: error,
+                    reportForeground: canReportForeground()
+                )
             }
         }
     }
@@ -1024,8 +1178,14 @@ extension SessionStore {
         sessionListCooldownUntilByBudgetKey.removeValue(forKey: sessionListBudgetKey(for: workspace))
     }
 
-    func prepareSelectedSessionAfterRefresh(_ session: AgentSession, autoAttach: Bool) async {
+    func prepareSelectedSessionAfterRefresh(
+        _ session: AgentSession,
+        autoAttach: Bool,
+        selectionLease: SessionSelectionLease
+    ) async {
+        guard isSelectionLeaseCurrent(selectionLease) else { return }
         await loadHistoryIfNeeded(for: session)
+        guard isSelectionLeaseCurrent(selectionLease) else { return }
         if session.isRunning {
             if autoAttach && canControlSession(session) {
                 // 前台恢复会反复走到这里；已加载会话的 loadHistoryIfNeeded 是 no-op，此时若做
@@ -1043,6 +1203,49 @@ extension SessionStore {
         } else if connectedSessionID != nil {
             disconnectWebSocket()
         }
+    }
+
+    func beginRecoveryHistoryGeneration() -> UInt64 {
+        recoveryHistoryGeneration &+= 1
+        return recoveryHistoryGeneration
+    }
+
+    /// App 回前台或网络恢复时，不能复用“签名没变化”的旧快照。Claude 自主 turn 可能在
+    /// detached 期间完成，而 thread/list 的 revision 尚未及时更新；每个恢复代次必须绕过缓存
+    /// 拉一次完整历史。成功后只需状态回放，失败时由调用方保留 full replay 兜底。
+    func reconcileHistoryForRecovery(
+        sessionID: SessionID,
+        generation: UInt64
+    ) async -> Bool {
+        if reconciledRecoveryGenerationBySessionID[sessionID] == generation {
+            // 必须返回本代请求结果，不能用旧 full snapshot 冒充本次成功。
+            return recoveryHistorySucceededBySessionID[sessionID] == true
+        }
+        guard generation == recoveryHistoryGeneration,
+              let session = sessionsByID[sessionID] else {
+            return false
+        }
+        let didLoad = await loadHistory(
+            for: session,
+            quiet: true,
+            loadMode: .full,
+            force: true,
+            reason: .automatic,
+            recoveryGeneration: generation
+        )
+        guard generation == recoveryHistoryGeneration else {
+            return false
+        }
+        // full 因大小策略自动降级为 economy 时 loadHistory 仍会返回 true，但 summary
+        // 不能证明 detached 期间的 assistant/process 内容已经完整对账，必须保留全量 replay。
+        let didLoadFullHistory = didLoad && historyLoadedQualityBySessionID[sessionID] == .full
+        reconciledRecoveryGenerationBySessionID[sessionID] = generation
+        recoveryHistorySucceededBySessionID[sessionID] = didLoadFullHistory
+        if didLoadFullHistory, let refreshed = sessionsByID[sessionID] {
+            // 历史内容和 thread 状态是两个权威面；随后再校准一次状态，清除陈旧 running。
+            await reconcileSessionStateAfterHistoryRefresh(refreshed)
+        }
+        return didLoadFullHistory
     }
 
     static func replacingSessions(_ current: [AgentSession], with fresh: [AgentSession], projectID: String?) -> [AgentSession] {
@@ -1542,43 +1745,15 @@ extension SessionStore {
         // SwiftUI 列表渲染时只读取缓存，避免每个项目行反复 filter + sort。
         let listableSessions = sessions.filter(isListableSession)
         let sorted = sortedSessionsForList(listableSessions)
-        if sessions.contains(where: \.isRunning) {
-            let previousOrder = frozenAllSessionOrder.isEmpty ? Self.sessionIDs(sortedAllSessions) : frozenAllSessionOrder
-            let frozen = Self.applyFrozenOrder(to: sorted, previousOrder: previousOrder)
-            sortedAllSessions = frozen
-            frozenAllSessionOrder = Self.sessionIDs(frozen)
-        } else {
-            sortedAllSessions = sorted
-            frozenAllSessionOrder = []
-        }
+        // Codex 与 Claude 的分页结果可能分批写入；全局和工作区列表都必须重新按同一活动时间排序。
+        // recencyAt 已隔离 Agent 后台输出噪声，因此不再因任一运行态冻结整张列表。
+        sortedAllSessions = sorted
 
-        var naturalGrouped: [String: [AgentSession]] = [:]
-        naturalGrouped.reserveCapacity(sidebarProjects.count)
-        for session in sorted {
-            naturalGrouped[session.projectID, default: []].append(session)
-        }
-
-        var runningProjectIDs: Set<String> = []
-        runningProjectIDs.reserveCapacity(naturalGrouped.count)
-        for session in listableSessions where session.isRunning {
-            runningProjectIDs.insert(session.projectID)
-        }
         var grouped: [String: [AgentSession]] = [:]
-        grouped.reserveCapacity(naturalGrouped.count)
-        for (projectID, projectSessions) in naturalGrouped {
-            guard runningProjectIDs.contains(projectID) else {
-                grouped[projectID] = projectSessions
-                frozenSessionOrderByProjectID.removeValue(forKey: projectID)
-                continue
-            }
-            let previousOrder = frozenSessionOrderByProjectID[projectID]
-                ?? sortedSessionsByProjectID[projectID].map(Self.sessionIDs)
-                ?? Self.sessionIDs(projectSessions)
-            let frozen = Self.applyFrozenOrder(to: projectSessions, previousOrder: previousOrder)
-            grouped[projectID] = frozen
-            frozenSessionOrderByProjectID[projectID] = Self.sessionIDs(frozen)
+        grouped.reserveCapacity(sidebarProjects.count)
+        for session in sorted {
+            grouped[session.projectID, default: []].append(session)
         }
-        frozenSessionOrderByProjectID = frozenSessionOrderByProjectID.filter { runningProjectIDs.contains($0.key) }
         sortedSessionsByProjectID = grouped
 
         var previews: [String: [AgentSession]] = [:]
@@ -1893,6 +2068,7 @@ extension SessionStore {
         historyLoadJobTokenBySessionID = historyLoadJobTokenBySessionID.filter { validSessionIDs.contains($0.key) }
         historyLoadedSignatureBySessionID = historyLoadedSignatureBySessionID.filter { validSessionIDs.contains($0.key) }
         historyLoadedQualityBySessionID = historyLoadedQualityBySessionID.filter { validSessionIDs.contains($0.key) }
+        deferredFullHistorySessionIDs.formIntersection(validSessionIDs)
         let staleHistoryFirstPageKeys = historyFirstPageInFlightByKey.keys.filter { !validSessionIDs.contains($0.sessionID) }
         for key in staleHistoryFirstPageKeys {
             historyFirstPageInFlightByKey[key]?.task.cancel()
@@ -1943,40 +2119,6 @@ extension SessionStore {
             }
             return (indexByID[lhs.id] ?? 0) < (indexByID[rhs.id] ?? 0)
         }
-    }
-
-    static func applyFrozenOrder(to items: [AgentSession], previousOrder: [SessionID]) -> [AgentSession] {
-        guard !items.isEmpty, !previousOrder.isEmpty else {
-            return items
-        }
-        let previousIDs = Set(previousOrder)
-        var byID: [SessionID: AgentSession] = [:]
-        byID.reserveCapacity(items.count)
-        for item in items {
-            byID[item.id] = item
-        }
-        var result: [AgentSession] = []
-        result.reserveCapacity(items.count)
-
-        // 新会话仍按当前排序排在前面；已有会话沿用冻结顺序，避免 running 输出刷新 updatedAt 时侧栏上下跳。
-        for item in items where !previousIDs.contains(item.id) {
-            result.append(item)
-        }
-        for id in previousOrder {
-            if let item = byID[id] {
-                result.append(item)
-            }
-        }
-        return result
-    }
-
-    static func sessionIDs(_ items: [AgentSession]) -> [SessionID] {
-        var ids: [SessionID] = []
-        ids.reserveCapacity(items.count)
-        for item in items {
-            ids.append(item.id)
-        }
-        return ids
     }
 
     static func projectIDs(_ items: [AgentProject]) -> Set<String> {

@@ -76,6 +76,7 @@ struct QRCodeScannerSheet: View {
                         // 明确只改父页面持有的扫码展示状态，不能用嵌套环境 dismiss 误关设置页。
                         dismissScanner()
                     }
+                    .accessibilityIdentifier("qrScanner.close")
                 }
             }
         }

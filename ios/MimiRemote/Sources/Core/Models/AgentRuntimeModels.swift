@@ -1017,6 +1017,12 @@ struct AgentEventMetadata: Codable, Hashable {
     let revision: ModelRevision?
     let createdAt: Date?
     let turnLifecycle: ConversationTurnLifecycle?
+    /// Claude gateway 的可恢复序号。它只在完整 turn/thread 边界上存在，
+    /// 且必须等 MainActor 已把事件写入 Conversation/Session 状态后才能提交。
+    let replayBoundarySequence: UInt64?
+    /// App 进程内的 bridge sequence epoch。reset 后旧连接的迟到确认必须被拒绝，
+    /// 否则会把刚清零的 cursor 又推进到上一代高水位。
+    let replayCursorEpoch: UInt64?
 
     enum CodingKeys: String, CodingKey {
         case seq
@@ -1028,6 +1034,8 @@ struct AgentEventMetadata: Codable, Hashable {
         case revision
         case createdAt = "created_at"
         case turnLifecycle = "turn_lifecycle"
+        case replayBoundarySequence = "replay_boundary_sequence"
+        case replayCursorEpoch = "replay_cursor_epoch"
     }
 
     init(
@@ -1039,7 +1047,9 @@ struct AgentEventMetadata: Codable, Hashable {
         clientMessageID: ClientMessageID?,
         revision: ModelRevision?,
         createdAt: Date?,
-        turnLifecycle: ConversationTurnLifecycle? = nil
+        turnLifecycle: ConversationTurnLifecycle? = nil,
+        replayBoundarySequence: UInt64? = nil,
+        replayCursorEpoch: UInt64? = nil
     ) {
         self.seq = seq
         self.sessionID = sessionID
@@ -1050,6 +1060,8 @@ struct AgentEventMetadata: Codable, Hashable {
         self.revision = revision
         self.createdAt = createdAt
         self.turnLifecycle = turnLifecycle
+        self.replayBoundarySequence = replayBoundarySequence
+        self.replayCursorEpoch = replayCursorEpoch
     }
 
     func withTurnLifecycle(_ lifecycle: ConversationTurnLifecycle) -> AgentEventMetadata {
@@ -1062,7 +1074,25 @@ struct AgentEventMetadata: Codable, Hashable {
             clientMessageID: clientMessageID,
             revision: revision,
             createdAt: createdAt,
-            turnLifecycle: lifecycle
+            turnLifecycle: lifecycle,
+            replayBoundarySequence: replayBoundarySequence,
+            replayCursorEpoch: replayCursorEpoch
+        )
+    }
+
+    func withReplayBoundarySequence(_ sequence: UInt64?, epoch: UInt64?) -> AgentEventMetadata {
+        AgentEventMetadata(
+            seq: seq,
+            sessionID: sessionID,
+            turnID: turnID,
+            itemID: itemID,
+            messageID: messageID,
+            clientMessageID: clientMessageID,
+            revision: revision,
+            createdAt: createdAt,
+            turnLifecycle: turnLifecycle,
+            replayBoundarySequence: sequence,
+            replayCursorEpoch: epoch
         )
     }
 }

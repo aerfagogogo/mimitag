@@ -68,9 +68,8 @@ struct ConversationView: View {
                 .padding(.horizontal, layout.horizontalInset)
                 .padding(.top, layout.composerTopPadding)
                 .padding(.bottom, layout.composerBottomPadding)
-                // 首页依靠暖色底和浮层卡片建立层级；会话页底部沿用同一语义，
-                // 去掉旧版整宽白色 dock 与硬分隔线，让输入卡片成为唯一主操作表面。
-                .background(tokens.background.opacity(0.97))
+                // 不再铺一层近实色 dock：安全区直接沿用会话主背景，只让 Composer
+                // 自己承担唯一的功能材质层，底部视觉不会与消息系统切成两块。
             }
             .background(tokens.background.ignoresSafeArea())
         }

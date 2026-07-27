@@ -54,6 +54,7 @@ func NewChecker(version string, cfg config.Config, registry *projects.Registry, 
 }
 
 func (c *Checker) Run(ctx context.Context, checkPort bool) Results {
+	projectsCount := len(c.registry.List())
 	tokenOK := c.cfg.DevInsecure || c.cfg.Auth.Token != ""
 	tokenMessage := "Token 已配置"
 	if !tokenOK {
@@ -66,7 +67,7 @@ func (c *Checker) Run(ctx context.Context, checkPort bool) Results {
 	}
 	checks := []Check{
 		{Name: "token", OK: tokenOK, Message: tokenMessage, Fix: "执行 agentd setup 生成随机 token，或设置 AGENTD_TOKEN"},
-		{Name: "projects", OK: len(c.registry.List()) > 0, Message: fmt.Sprintf("已加载 %d 个项目", len(c.registry.List())), Fix: "在 config.json 配置 projects，或设置 AGENTD_PROJECTS=/path/a,/path/b"},
+		{Name: "projects", OK: projectsCount > 0, Message: fmt.Sprintf("已加载 %d 个项目", projectsCount), Fix: "在 config.json 配置 projects，或设置 AGENTD_PROJECTS=/path/a,/path/b"},
 		{Name: "codex", OK: codexOK, Message: codexMessage, Fix: "安装 Codex CLI 并确认 codex 在 PATH 中；Homebrew service 推荐先运行 agentd setup 记录绝对路径"},
 		c.runtimeCheck(),
 		{Name: "tailscale", OK: commandExists("tailscale"), Message: "检测到 Tailscale 命令", Fix: "安装并登录 Tailscale：https://tailscale.com/download"},
@@ -93,7 +94,37 @@ func (c *Checker) Run(ctx context.Context, checkPort bool) Results {
 	if checkPort {
 		checks = append(checks, c.portChecks(ctx)...)
 	}
+	return c.results(checks)
+}
 
+// RunReadiness 只执行能够直接判断当前 HTTP/gateway 是否可承接移动端请求的本地检查。
+// codesign、CLI --help、bridge --version 等外部进程属于完整诊断；把它们放进高频 readyz
+// 会在主机高负载时制造假离线，并让 status 子进程超过 macOS App 的执行上限。
+func (c *Checker) RunReadiness(_ context.Context) Results {
+	projectsCount := len(c.registry.List())
+	tokenOK := c.cfg.DevInsecure || c.cfg.Auth.Token != ""
+	tokenMessage := "Token 已配置"
+	if !tokenOK {
+		tokenMessage = "Token 未配置"
+	}
+	checks := []Check{
+		{Name: "token", OK: tokenOK, Message: tokenMessage, Fix: "执行 agentd setup 生成随机 token，或设置 AGENTD_TOKEN"},
+		{Name: "projects", OK: projectsCount > 0, Message: fmt.Sprintf("已加载 %d 个项目", projectsCount), Fix: "在 config.json 配置 projects，或设置 AGENTD_PROJECTS=/path/a,/path/b"},
+		c.runtimeCheck(),
+	}
+	if check := c.configFileCheck(); check.Name != "" {
+		checks = append(checks, check)
+	}
+	if check := c.appServerTokenFileCheck(); check.Name != "" {
+		checks = append(checks, check)
+	}
+	if check := c.appServerGatewayCheck(); check.Name != "" {
+		checks = append(checks, check)
+	}
+	return c.results(checks)
+}
+
+func (c *Checker) results(checks []Check) Results {
 	ok := true
 	for i := range checks {
 		if checks[i].OK {
@@ -307,11 +338,12 @@ func (c *Checker) claudeBridgeCheck(ctx context.Context) Check {
 	if !c.cfg.Claude.Enabled {
 		return Check{Name: "claude-bridge", OK: true, Message: "Claude Code experimental 通道未启用"}
 	}
-	bin := strings.TrimSpace(c.cfg.Claude.BridgeBin)
-	if bin == "" {
-		return Check{Name: "claude-bridge", OK: false, Message: "Claude bridge 未配置", Fix: "设置 claude.bridge_bin 或 AGENTD_CLAUDE_BRIDGE_BIN"}
-	}
-	if !commandExists(bin) {
+	configuredBin := strings.TrimSpace(c.cfg.Claude.BridgeBin)
+	bin, ok := claudebridge.ResolveBinary(configuredBin)
+	if !ok {
+		if configuredBin == "" {
+			return Check{Name: "claude-bridge", OK: false, Message: "Claude bridge 未配置", Fix: "安装 alleycat-claude-bridge，或使用内置 bridge 的 Mimi Remote Mac"}
+		}
 		return Check{Name: "claude-bridge", OK: false, Message: "未找到 Claude bridge", Fix: "安装 alleycat-claude-bridge，并把 claude.bridge_bin 配成绝对路径"}
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 2*time.Second)

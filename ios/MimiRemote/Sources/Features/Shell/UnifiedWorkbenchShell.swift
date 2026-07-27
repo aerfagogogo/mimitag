@@ -47,7 +47,7 @@ enum WorkbenchNavigationEffect: Equatable {
 enum WorkbenchNavigationEvent: Equatable {
     case open(AppDestination, source: WorkbenchRootPage?)
     case synchronize(WorkbenchRestorationRoute)
-    case selectedSessionChanged(SessionID?)
+    case selectionCommitted(SessionSelectionCommit)
     case compactPathChanged(tab: CompactWorkbenchTab, path: [AppDestination])
     case compactTabChanged(CompactWorkbenchTab)
     case sessionSelectionFinished(SessionID)
@@ -88,6 +88,17 @@ struct WorkbenchNavigationState: Equatable {
         }
     }
 
+    /// selectedSessionID 可能在设置 Tab 或列表页继续保留，不能据此判断会话是否真的可见。
+    func visibleSessionID(usesCompactNavigation: Bool) -> SessionID? {
+        if usesCompactNavigation, compactSelectedTab == .settings {
+            return nil
+        }
+        guard case .session(let sessionID) = selection else {
+            return nil
+        }
+        return sessionID
+    }
+
     @discardableResult
     mutating func reduce(
         _ event: WorkbenchNavigationEvent,
@@ -114,19 +125,56 @@ struct WorkbenchNavigationState: Equatable {
             restoreCompactPath(for: restoredRoute)
             return nil
 
-        case .selectedSessionChanged(let sessionID):
+        case .selectionCommitted(let commit):
             pendingSessionSelectionID = nil
-            guard let sessionID else {
+            switch commit.reason {
+            case .invalidation:
                 guard route.detailSessionID != nil else { return nil }
                 applyRoot(route.rootPage, usesCompactNavigation: usesCompactNavigation)
-                return nil
+
+            case .identityReplacement(let previousID):
+                guard route.detailSessionID == previousID,
+                      let sessionID = commit.sessionID else { return nil }
+                applySession(
+                    sessionID,
+                    source: route.rootPage,
+                    usesCompactNavigation: usesCompactNavigation,
+                    replacesCompactPath: true
+                )
+
+            case .restoration:
+                // Root 只允许仍与启动快照一致的恢复提交；这里再约束一次，
+                // 防止恢复结果把用户后来进入的列表或其他详情重新覆盖。
+                guard let sessionID = commit.sessionID,
+                      route.detailSessionID == sessionID else { return nil }
+                applySession(
+                    sessionID,
+                    source: route.rootPage,
+                    usesCompactNavigation: usesCompactNavigation,
+                    replacesCompactPath: true
+                )
+
+            case .notification:
+                guard let sessionID = commit.sessionID else { return nil }
+                applySession(
+                    sessionID,
+                    source: .sessions,
+                    usesCompactNavigation: usesCompactNavigation,
+                    replacesCompactPath: false
+                )
+
+            case .userOpen:
+                guard let sessionID = commit.sessionID else { return nil }
+                let source = route.detailSessionID == sessionID
+                    ? route.rootPage
+                    : (usesCompactNavigation ? activeRootPage : route.rootPage)
+                applySession(
+                    sessionID,
+                    source: source,
+                    usesCompactNavigation: usesCompactNavigation,
+                    replacesCompactPath: false
+                )
             }
-            applySession(
-                sessionID,
-                source: usesCompactNavigation ? activeRootPage : route.rootPage,
-                usesCompactNavigation: usesCompactNavigation,
-                replacesCompactPath: false
-            )
             return nil
 
         case .compactPathChanged(let tab, let path):
@@ -276,7 +324,9 @@ struct WorkbenchNavigationState: Equatable {
     ) -> WorkbenchNavigationEffect? {
         switch destination {
         case .sessions, .workspaces:
-            return selectedSessionID == nil ? nil : .returnToSessionList
+            // 返回列表本身就是显式用户意图；即使当前 ID 已为空也要推进选择代次，
+            // 让仍在等待的恢复、通知和创建任务立即失效。
+            return .returnToSessionList
         case .session(let sessionID):
             guard selectedSessionID != sessionID,
                   pendingSessionSelectionID != sessionID else { return nil }
@@ -340,14 +390,17 @@ struct UnifiedWorkbenchShell: View {
     @EnvironmentObject private var appStore: AppStore
     @EnvironmentObject private var sessionStore: SessionStore
     @EnvironmentObject private var themeStore: ThemeStore
+    @EnvironmentObject private var notificationResponseAdapter: SessionNotificationResponseAdapter
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     @Binding var showingInspector: Bool
     @Binding var restorationRoute: WorkbenchRestorationRoute
     @State private var navigationState = WorkbenchNavigationState()
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var presentedSheet: AppSheetDestination?
+    @State private var notificationVisibilitySceneID = UUID()
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -395,15 +448,29 @@ struct UnifiedWorkbenchShell: View {
                 synchronizeNavigation(for: layout)
             }
             .onChange(of: layout.usesCompactNavigation) { _, usesCompactNavigation in
-                guard usesCompactNavigation else { return }
-                synchronizeNavigation(for: layout)
+                handleLayoutModeChange(
+                    usesCompactNavigation: usesCompactNavigation,
+                    layout: layout
+                )
             }
-            .onChange(of: sessionStore.selectedSessionID) { _, sessionID in
-                handleSelectedSessionChange(sessionID, layout: layout)
+            .onChange(of: sessionStore.lastSelectionCommit) { _, commit in
+                guard let commit else { return }
+                handleSelectionCommit(commit, layout: layout)
             }
             .onChange(of: restorationRoute) { _, route in
                 guard navigationState.route != route else { return }
                 applyNavigation(.synchronize(route), layout: layout)
+            }
+            .onAppear {
+                updateVisibleSessionNotificationRoute(
+                    visibleSessionNotificationRoute(layout: layout)
+                )
+            }
+            .onChange(of: visibleSessionNotificationRoute(layout: layout)) { _, route in
+                updateVisibleSessionNotificationRoute(route)
+            }
+            .onDisappear {
+                updateVisibleSessionNotificationRoute(nil)
             }
         }
         .background(tokens.background.ignoresSafeArea())
@@ -414,6 +481,34 @@ struct UnifiedWorkbenchShell: View {
                 networkUnavailableBanner(tokens: tokens)
             }
         }
+    }
+
+    private func visibleSessionNotificationRoute(
+        layout: WorkbenchLayout
+    ) -> SessionNotificationRoute? {
+        guard scenePhase == .active,
+              presentedSheet == nil,
+              !(showingInspector && !layout.usesAttachedInspector),
+              let visibleSessionID = navigationState.visibleSessionID(
+                  usesCompactNavigation: layout.usesCompactNavigation
+              ),
+              let session = sessionStore.selectedSession,
+              session.id == visibleSessionID
+        else {
+            return nil
+        }
+        return SessionNotificationRoute.current(
+            profileID: appStore.notificationRoutingProfileID,
+            projectID: session.projectID,
+            sessionID: session.id
+        )
+    }
+
+    private func updateVisibleSessionNotificationRoute(_ route: SessionNotificationRoute?) {
+        notificationResponseAdapter.setVisibleSessionRoute(
+            route,
+            for: notificationVisibilitySceneID
+        )
     }
 
     private func compactLayout(
@@ -429,6 +524,7 @@ struct UnifiedWorkbenchShell: View {
             }
             .tabItem {
                 Label(CompactWorkbenchTab.sessions.title, systemImage: CompactWorkbenchTab.sessions.systemImage)
+                    .accessibilityIdentifier("compactTab.sessions")
             }
             .tag(CompactWorkbenchTab.sessions)
 
@@ -440,6 +536,7 @@ struct UnifiedWorkbenchShell: View {
             }
             .tabItem {
                 Label(CompactWorkbenchTab.workspaces.title, systemImage: CompactWorkbenchTab.workspaces.systemImage)
+                    .accessibilityIdentifier("compactTab.workspaces")
             }
             .tag(CompactWorkbenchTab.workspaces)
 
@@ -460,6 +557,7 @@ struct UnifiedWorkbenchShell: View {
             }
             .tabItem {
                 Label(CompactWorkbenchTab.settings.title, systemImage: CompactWorkbenchTab.settings.systemImage)
+                    .accessibilityIdentifier("compactTab.settings")
             }
             .tag(CompactWorkbenchTab.settings)
         }
@@ -764,9 +862,9 @@ struct UnifiedWorkbenchShell: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 2) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(sessionStore.selectedSession?.title ?? L10n.text("ui.session"))
-                        .font(themeStore.uiFont(.subheadline, weight: .semibold))
+                        .font(themeStore.uiFont(size: 17, weight: .semibold))
                         .foregroundStyle(tokens.primaryText)
                         .lineLimit(1)
 
@@ -776,32 +874,61 @@ struct UnifiedWorkbenchShell: View {
                             .frame(width: 5, height: 5)
 
                         Text(sessionTitleSubtitle)
-                            .font(themeStore.uiFont(.caption2, weight: .medium))
+                            .font(themeStore.uiFont(size: 13, weight: .medium))
                             .foregroundStyle(tokens.tertiaryText)
                             .lineLimit(1)
                     }
                 }
-                .frame(maxWidth: layout.titleMaxWidth)
+                .frame(maxWidth: layout.titleMaxWidth, alignment: .leading)
                 .accessibilityElement(children: .combine)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                workbenchToolbarIconButton(
-                    systemImage: "arrow.clockwise",
-                    accessibilityLabel: L10n.text("ui.refresh_current_session"),
-                    tokens: tokens,
-                    isDisabled: sessionStore.isRefreshingSelectedSession || sessionStore.isLoading
-                ) {
-                    Task { await sessionStore.refreshCurrentContext() }
+            if layout.usesCompactNavigation {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            Task { await sessionStore.refreshCurrentContext() }
+                        } label: {
+                            Label(L10n.text("ui.refresh_current_session"), systemImage: "arrow.clockwise")
+                        }
+                        .disabled(sessionStore.isRefreshingSelectedSession || sessionStore.isLoading)
+
+                        Button {
+                            showingInspector.toggle()
+                        } label: {
+                            Label(
+                                showingInspector ? L10n.text("ui.hide_details") : L10n.text("ui.show_details"),
+                                systemImage: "sidebar.right"
+                            )
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(tokens.secondaryText)
+                    }
+                    .accessibilityLabel(L10n.text("ui.options"))
                 }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                workbenchToolbarIconButton(
-                    systemImage: "sidebar.right",
-                    accessibilityLabel: showingInspector ? L10n.text("ui.hide_details") : L10n.text("ui.show_details"),
-                    tokens: tokens,
-                    isActive: showingInspector
-                ) {
-                    showingInspector.toggle()
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    workbenchToolbarIconButton(
+                        systemImage: "arrow.clockwise",
+                        accessibilityLabel: L10n.text("ui.refresh_current_session"),
+                        tokens: tokens,
+                        isDisabled: sessionStore.isRefreshingSelectedSession || sessionStore.isLoading
+                    ) {
+                        Task { await sessionStore.refreshCurrentContext() }
+                    }
+                }
+                // 宽屏保留两个独立动作；手机端已经收进单一更多菜单。
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarItem(placement: .topBarTrailing) {
+                    workbenchToolbarIconButton(
+                        systemImage: "sidebar.right",
+                        accessibilityLabel: showingInspector ? L10n.text("ui.hide_details") : L10n.text("ui.show_details"),
+                        tokens: tokens,
+                        isActive: showingInspector
+                    ) {
+                        showingInspector.toggle()
+                    }
                 }
             }
         }
@@ -872,15 +999,34 @@ struct UnifiedWorkbenchShell: View {
         applyNavigation(.synchronize(restorationRoute), layout: layout)
     }
 
-    private func handleSelectedSessionChange(
-        _ sessionID: SessionID?,
+    private func handleLayoutModeChange(
+        usesCompactNavigation: Bool,
         layout: WorkbenchLayout
     ) {
-        if sessionID == nil, presentedSheet == .newSession {
-            // 新建流程会先清空旧 ID，再写入 local:*；中间态不能把详情先 pop 回根页面。
+        if usesCompactNavigation {
+            if presentedSheet == .settings {
+                // 横屏的 split layout 用 sheet 承载设置；回到紧凑布局时把同一页面
+                // 还原为设置 Tab，避免旋转后突然跳回会话并丢失用户刚选的内容。
+                presentedSheet = nil
+                applyNavigation(.compactTabChanged(.settings), layout: layout)
+            } else {
+                synchronizeNavigation(for: layout)
+            }
             return
         }
-        applyNavigation(.selectedSessionChanged(sessionID), layout: layout)
+
+        if navigationState.compactSelectedTab == .settings {
+            // split layout 没有“设置”详情 destination。旋转时继续以 sheet 呈现同一
+            // SettingsView，使表单状态和 @AppStorage 选择保持可见且可操作。
+            presentedSheet = .settings
+        }
+    }
+
+    private func handleSelectionCommit(
+        _ commit: SessionSelectionCommit,
+        layout: WorkbenchLayout
+    ) {
+        applyNavigation(.selectionCommitted(commit), layout: layout)
     }
 
     private func applyNavigation(

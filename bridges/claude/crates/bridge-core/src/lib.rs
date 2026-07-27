@@ -24,10 +24,16 @@ pub use launcher::{
     ProcessRole, ProcessSpec, StdioMode,
 };
 pub use notify::NotificationSender;
-pub use server::{Bridge, Conn, serve_stdio, serve_stream, serve_stream_with_session};
+pub use server::{
+    ATTACH_METHOD, ATTACHED_METHOD, Bridge, Conn, serve_stdio, serve_stream, serve_stream_attached,
+    serve_stream_with_session,
+};
 #[cfg(unix)]
 pub use server::{ServerOptions, serve_unix};
-pub use session::{AttachKind, AttachOutcome, Session, SessionRegistry, SessionRegistryConfig};
+pub use session::{
+    AttachKind, AttachOutcome, AttachReservation, Session, SessionRegistry, SessionRegistryConfig,
+    TurnGuard,
+};
 pub use thread_index::{
     DEFAULT_LIST_LIMIT, Hydrator, IndexEntry, ListFilter, ListPage, ListSort, MAX_LIST_LIMIT,
     ThreadIndex, ThreadIndexHandle, encode_backwards_cursor, resolve_list_limit,

@@ -547,31 +547,10 @@ extension CodexAppServerSessionRuntime {
         return next
     }
 
-    func threadListCWD(for workspace: AgentWorkspace, projects: [AgentProject]) -> String {
-        let rootProjectID = workspace.rootProjectID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !rootProjectID.isEmpty,
-              let rootProject = projects.first(where: { $0.id == rootProjectID }),
-              let workspacePath = standardizedPath(workspace.path),
-              let rootPath = standardizedPath(rootProject.path),
-              path(workspacePath, isEqualToOrInside: rootPath)
-        else {
-            return workspace.path
-        }
-        // 项目内子路径打开时沿用 root project 拉历史；否则 app-server 会按子目录精确 cwd 返回空列表。
-        // managed worktree / browse workspace 通常不在 rootPath 下，会保留自己的真实路径隔离历史。
-        return rootProject.path
-    }
-
-    func path(_ path: String, isEqualToOrInside rootPath: String) -> Bool {
-        path == rootPath || path.hasPrefix(rootPath == "/" ? "/" : rootPath + "/")
-    }
-
-    func standardizedPath(_ raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-        return URL(fileURLWithPath: trimmed).standardizedFileURL.path
+    func threadListCWD(for workspace: AgentWorkspace) -> String {
+        // 工作区是一个精确 cwd 绑定：即使它位于 allowlist 根项目内部，也不能退回根目录拉历史，
+        // 否则父目录和兄弟项目的会话会被错误投影到当前工作区。
+        workspace.path
     }
 
     func projectsIncludingSessionContext(_ projects: [AgentProject], context: CodexAppServerSessionContext) -> [AgentProject] {

@@ -842,7 +842,8 @@ extension ConversationDataFlowTests {
         XCTAssertLessThanOrEqual(started.turnStartedAt, started.lastActivityAt)
         try await waitForSelectedActiveTurnID("turn-runtime", store: store)
 
-        try await Task.sleep(nanoseconds: 120_000_000)
+        // 运行时活动在 1 秒内合并高频事件，测试需要跨过该窗口再验证时间推进。
+        try await Task.sleep(nanoseconds: 1_050_000_000)
         sockets[0].emitEvent(.logDelta(
             LogDelta(text: "still working\n", stream: "stdout"),
             AgentEventMetadata(
@@ -985,7 +986,7 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(sockets[0].sentTurns.first?.payload.textPrompt, "修复 iPad 目标入口")
     }
 
-    func testQueuedGoalDoesNotCompleteWithPreviousTurn() async throws {
+    func testQueuedGoalRemainsActiveAfterItsTurnCompletes() async throws {
         let project = makeProject(id: "proj_goal_queued")
         let running = makeSession(
             id: "sess_goal_queued",
@@ -1060,10 +1061,15 @@ extension ConversationDataFlowTests {
             revision: nil,
             createdAt: nil
         )))
-        try await waitForSelectedThreadGoalStatus(.complete, store: store)
+        try await waitForSelectedSessionStatus(SessionStatus.completed.rawValue, store: store)
+        XCTAssertEqual(
+            store.selectedThreadGoal?.status,
+            .active,
+            "turn/completed 只能结束当前轮次，不能代替明确的 goal 状态更新"
+        )
     }
 
-    func testTurnCompletionFinishesActiveGoalAndIgnoresStaleActiveGoalRefresh() async throws {
+    func testTurnCompletionKeepsActiveGoalUntilExplicitCompletionAndIgnoresStaleRefresh() async throws {
         let project = makeProject(id: "proj_goal_complete")
         let goal = ThreadGoal(
             threadID: "thread_goal_complete",
@@ -1134,14 +1140,38 @@ extension ConversationDataFlowTests {
             createdAt: nil
         )))
 
-        try await waitForSelectedThreadGoalStatus(.complete, store: store)
         try await waitForSelectedSessionStatus(SessionStatus.completed.rawValue, store: store)
         try await waitForSelectedActiveTurnID(nil, store: store)
         XCTAssertEqual(store.selectedSession?.status, SessionStatus.completed.rawValue)
         XCTAssertNil(store.selectedSession?.activeTurnID)
+        XCTAssertEqual(
+            store.selectedThreadGoal?.status,
+            .active,
+            "目标生命周期必须由 goal 事件或用户操作驱动，不能从普通 turn 完成推断"
+        )
+
+        let completedGoal = ThreadGoal(
+            threadID: goal.threadID,
+            objective: goal.objective,
+            status: .complete,
+            tokenBudget: goal.tokenBudget,
+            tokensUsed: goal.tokensUsed,
+            timeUsedSeconds: goal.timeUsedSeconds
+        )
+        sockets[0].emitEvent(.goalUpdated(completedGoal, AgentEventMetadata(
+            seq: 2,
+            sessionID: running.id,
+            turnID: nil,
+            itemID: nil,
+            messageID: nil,
+            clientMessageID: nil,
+            revision: nil,
+            createdAt: nil
+        )))
+        try await waitForSelectedThreadGoalStatus(.complete, store: store)
 
         sockets[0].emitEvent(.goalUpdated(goal, AgentEventMetadata(
-            seq: 2,
+            seq: 3,
             sessionID: running.id,
             turnID: nil,
             itemID: nil,
@@ -1441,7 +1471,7 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(createPayload.turnOptions.networkAccess, false)
     }
 
-    func testExplicitModelBypassesModelListResolutionBeforeCreate() async throws {
+    func testUnknownExplicitModelIsValidatedAndFallsBackBeforeCreate() async throws {
         let project = makeProject(id: "proj_explicit_model_create")
         let created = makeSession(id: "sess_explicit_model_create", projectID: project.id, title: "显式模型", status: "running", source: "codex")
         let client = MockSessionStoreClient(
@@ -1468,9 +1498,9 @@ extension ConversationDataFlowTests {
 
         XCTAssertTrue(accepted)
         let createPayload = try XCTUnwrap(client.createPayloads.first)
-        XCTAssertEqual(createPayload.turnOptions.model, "gpt-user-selected")
-        XCTAssertEqual(createPayload.turnOptions.modelProvider, "custom-provider")
-        XCTAssertEqual(client.modelOptionsCallCount, 0)
+        XCTAssertEqual(createPayload.turnOptions.model, "gpt-should-not-load")
+        XCTAssertEqual(createPayload.turnOptions.modelProvider, "openai")
+        XCTAssertEqual(client.modelOptionsCallCount, 1)
     }
 
     func testCodexHistorySessionIgnoresStaleClaudeModelSelectionBeforeResume() async throws {
@@ -1588,6 +1618,57 @@ extension ConversationDataFlowTests {
         let client = MockSessionStoreClient(
             projects: [project],
             sessions: [],
+            createSessionResponse: try makeCreateSessionResponse(session: created),
+            modelOptions: [
+                CodexAppServerModelOption(
+                    id: "sonnet",
+                    title: "Claude Sonnet",
+                    provider: "anthropic",
+                    runtimeProvider: "claude",
+                    isDefault: true
+                )
+            ]
+        )
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+
+        await store.refreshAll(autoAttach: false)
+        store.selectedProjectID = project.id
+        var options = CodexAppServerTurnOptions.default
+        options.runtimeProvider = "claude"
+        options.model = "SONNET"
+        options.modelProvider = "anthropic"
+        options.sandboxMode = .dangerFullAccess
+        options.networkAccess = true
+        let accepted = await store.sendTurn(CodexAppServerTurnPayload(prompt: "使用 Claude", options: options))
+
+        XCTAssertTrue(accepted)
+        let createPayload = try XCTUnwrap(client.createPayloads.first)
+        XCTAssertEqual(createPayload.turnOptions.runtimeProvider, "claude")
+        XCTAssertEqual(createPayload.turnOptions.model, "sonnet")
+        XCTAssertEqual(createPayload.turnOptions.modelProvider, "anthropic")
+        XCTAssertEqual(createPayload.turnOptions.sandboxMode, .workspaceWrite)
+        XCTAssertEqual(createPayload.turnOptions.networkAccess, false)
+        XCTAssertEqual(client.modelOptionsCallCount, 1)
+    }
+
+    func testDeveloperModelPolicyKeepsUnlistedModelBeforeCreate() async throws {
+        let project = makeProject(id: "proj_unlisted_developer_model")
+        let created = makeSession(
+            id: "sess_unlisted_developer_model",
+            projectID: project.id,
+            title: "Developer Model",
+            status: "running",
+            source: "claude",
+            runtimeProvider: "claude"
+        )
+        let client = MockSessionStoreClient(
+            projects: [project],
+            sessions: [],
             createSessionResponse: try makeCreateSessionResponse(session: created)
         )
         let store = SessionStore(
@@ -1601,18 +1682,18 @@ extension ConversationDataFlowTests {
         store.selectedProjectID = project.id
         var options = CodexAppServerTurnOptions.default
         options.runtimeProvider = "claude"
-        options.model = "claude-sonnet"
+        options.model = "private-model-alias"
         options.modelProvider = "anthropic"
-        options.sandboxMode = .dangerFullAccess
-        options.networkAccess = true
-        let accepted = await store.sendTurn(CodexAppServerTurnPayload(prompt: "使用 Claude", options: options))
+        options.modelSelectionPolicy = .allowUnlisted
+        let accepted = await store.sendTurn(
+            CodexAppServerTurnPayload(prompt: "使用开发者自定义模型", options: options)
+        )
 
         XCTAssertTrue(accepted)
         let createPayload = try XCTUnwrap(client.createPayloads.first)
-        XCTAssertEqual(createPayload.turnOptions.runtimeProvider, "claude")
-        XCTAssertEqual(createPayload.turnOptions.model, "claude-sonnet")
-        XCTAssertEqual(createPayload.turnOptions.sandboxMode, .workspaceWrite)
-        XCTAssertEqual(createPayload.turnOptions.networkAccess, false)
+        XCTAssertEqual(createPayload.turnOptions.model, "private-model-alias")
+        XCTAssertEqual(createPayload.turnOptions.modelProvider, "anthropic")
+        XCTAssertEqual(createPayload.turnOptions.modelSelectionPolicy, .allowUnlisted)
         XCTAssertEqual(client.modelOptionsCallCount, 0)
     }
 
@@ -1769,6 +1850,10 @@ extension ConversationDataFlowTests {
         let sendSucceeded = await sendTask.value
         XCTAssertTrue(sendSucceeded)
         XCTAssertEqual(store.selectedSessionID, created.id)
+        XCTAssertEqual(
+            store.lastSelectionCommit?.reason,
+            .identityReplacement(previousID: optimisticSessionID)
+        )
         XCTAssertFalse(store.sessions.contains { $0.id == optimisticSessionID })
         XCTAssertTrue(conversationStore.messages(for: optimisticSessionID).isEmpty)
         let messages = conversationStore.messages(for: created.id)
@@ -1776,6 +1861,122 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(messages.first?.clientMessageID, clientMessageID)
         XCTAssertEqual(messages.first?.sendStatus, .confirmed)
         XCTAssertEqual(messages.first?.stableID, "client:\(clientMessageID)")
+    }
+
+    func testDelayedCreateMigratesOptimisticDataWithoutReclaimingSelectionOrSocket() async throws {
+        let project = makeProject(id: "proj_delayed_create_selection")
+        let second = makeSession(
+            id: "thread_user_selected_b",
+            projectID: project.id,
+            title: "B",
+            status: "history",
+            source: "codex"
+        )
+        let created = makeSession(
+            id: "thread_delayed_created_a",
+            projectID: project.id,
+            title: "A",
+            status: "running",
+            source: "codex"
+        )
+        let client = DelayedCreateSessionClient(projects: [project], sessions: [second])
+        let conversationStore = ConversationStore()
+        let socket = MockWebSocketClient()
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: conversationStore,
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: { socket }
+        )
+        store.selectedProjectID = project.id
+        await store.refreshAll(autoAttach: false)
+        await store.selectSession(second)
+
+        let createTask = Task {
+            await store.createSession(
+                projectID: project.id,
+                prompt: "创建 A",
+                resume: nil,
+                clientMessageID: "client-delayed-a"
+            )
+        }
+        await client.waitForCreateRequestCount(1)
+        let optimisticID = try XCTUnwrap(store.selectedSessionID)
+        XCTAssertTrue(optimisticID.hasPrefix("local:"))
+
+        await store.selectSession(second)
+        client.resolveCreate(with: .success(try makeCreateSessionResponse(session: created)))
+        let didCreate = await createTask.value
+        XCTAssertTrue(didCreate)
+
+        XCTAssertEqual(store.selectedSessionID, second.id)
+        XCTAssertEqual(store.connectedSessionID, second.id)
+        XCTAssertEqual(socket.connectedSessionIDs.last, second.id)
+        XCTAssertTrue(store.sessions.contains { $0.id == created.id })
+        XCTAssertFalse(store.sessions.contains { $0.id == optimisticID })
+        XCTAssertTrue(conversationStore.messages(for: optimisticID).isEmpty)
+        XCTAssertEqual(conversationStore.messages(for: created.id).map(\.content), ["创建 A"])
+    }
+
+    func testDelayedHistoryResumeCompletesWithoutReclaimingLaterSelection() async throws {
+        let project = makeProject(id: "proj_delayed_resume_selection")
+        let history = makeSession(
+            id: "thread_resume_source_a",
+            projectID: project.id,
+            title: "历史 A",
+            status: "history",
+            source: "codex",
+            resumeID: "resume-source-a"
+        )
+        let second = makeSession(
+            id: "thread_resume_selected_b",
+            projectID: project.id,
+            title: "用户 B",
+            status: "history",
+            source: "codex"
+        )
+        let resumed = makeSession(
+            id: "thread_resumed_real_a",
+            projectID: project.id,
+            title: "继续 A",
+            status: "running",
+            source: "codex"
+        )
+        let client = DelayedCreateSessionClient(projects: [project], sessions: [history, second])
+        let conversationStore = ConversationStore()
+        let socket = MockWebSocketClient()
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: conversationStore,
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: { socket }
+        )
+        store.selectedProjectID = project.id
+        await store.refreshAll(autoAttach: false)
+
+        let resumeTask = Task {
+            await store.createSession(
+                projectID: project.id,
+                prompt: "继续处理 A",
+                resume: history,
+                clientMessageID: "client-resume-a"
+            )
+        }
+        await client.waitForCreateRequestCount(1)
+        XCTAssertEqual(store.selectedSessionID, history.id)
+
+        await store.selectSession(second)
+        client.resolveCreate(with: .success(try makeCreateSessionResponse(session: resumed)))
+        let didResume = await resumeTask.value
+
+        XCTAssertTrue(didResume)
+        XCTAssertEqual(store.selectedSessionID, second.id)
+        XCTAssertEqual(store.connectedSessionID, second.id)
+        XCTAssertEqual(socket.connectedSessionIDs.last, second.id)
+        XCTAssertTrue(store.sessions.contains { $0.id == resumed.id })
+        XCTAssertEqual(conversationStore.messages(for: resumed.id).map(\.content), ["继续处理 A"])
     }
 
     func testNewSessionPromptFailureKeepsFailedLocalEcho() async throws {

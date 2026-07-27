@@ -27,7 +27,8 @@ const (
 var gitRemoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 type gitStatusRequest struct {
-	Path string `json:"path"`
+	Path        string `json:"path"`
+	SummaryOnly bool   `json:"summary_only,omitempty"`
 }
 
 type gitActionRequest struct {
@@ -103,9 +104,9 @@ type githubPullRequestView struct {
 type gitFileStatus struct {
 	Path      string `json:"path"`
 	Code      string `json:"code"`
-	Staged    bool   `json:"staged,omitempty"`
-	Unstaged  bool   `json:"unstaged,omitempty"`
-	Untracked bool   `json:"untracked,omitempty"`
+	Staged    bool   `json:"staged"`
+	Unstaged  bool   `json:"unstaged"`
+	Untracked bool   `json:"untracked"`
 }
 
 type gitStatusResponse struct {
@@ -113,6 +114,9 @@ type gitStatusResponse struct {
 	IsRepository  bool            `json:"is_repository"`
 	Branch        string          `json:"branch,omitempty"`
 	Head          string          `json:"head,omitempty"`
+	Ahead         int             `json:"ahead,omitempty"`
+	Behind        int             `json:"behind,omitempty"`
+	Upstream      string          `json:"upstream,omitempty"`
 	StatusText    string          `json:"status_text,omitempty"`
 	DiffStat      string          `json:"diff_stat,omitempty"`
 	UnstagedDiff  string          `json:"unstaged_diff,omitempty"`
@@ -154,7 +158,7 @@ func (r *Router) gitStatusHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	status, err := r.gitStatus(req.Context(), realPath)
+	status, err := r.gitStatusWithOptions(req.Context(), realPath, payload.SummaryOnly)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -370,6 +374,10 @@ func (r *Router) validatedGitDirectory(w http.ResponseWriter, rawPath string) (s
 }
 
 func (r *Router) gitStatus(ctx context.Context, realPath string) (gitStatusResponse, error) {
+	return r.gitStatusWithOptions(ctx, realPath, false)
+}
+
+func (r *Router) gitStatusWithOptions(ctx context.Context, realPath string, summaryOnly bool) (gitStatusResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitStatusCommandTimeout)
 	defer cancel()
 
@@ -387,14 +395,38 @@ func (r *Router) gitStatus(ctx context.Context, realPath string) (gitStatusRespo
 		return gitStatusResponse{}, err
 	}
 
+	// 卡片摘要只读取一次 porcelain 状态，不生成最多 192 KiB 的 diff。
+	// 完整审查接口继续沿用下面的原有路径，保证 Inspector 行为不变。
 	var truncated bool
-	statusText, cut, err := runGitReadOnly(ctx, realPath, gitStatusOutputLimit, "status", "--short", "--", ".")
+	statusPorcelain, cut, err := runGitReadOnly(ctx, realPath, gitStatusOutputLimit, "status", "--porcelain=v1", "-z", "--", ".")
 	if err != nil {
 		return gitStatusResponse{}, err
 	}
 	truncated = truncated || cut
 
-	statusPorcelain, cut, err := runGitReadOnly(ctx, realPath, gitStatusOutputLimit, "status", "--porcelain=v1", "-z", "--", ".")
+	branch, _, _ := runGitReadOnly(ctx, realPath, 4*1024, "branch", "--show-current")
+	head, _, _ := runGitReadOnly(ctx, realPath, 4*1024, "rev-parse", "--short", "HEAD")
+
+	if summaryOnly {
+		ahead, behind, upstream := gitUpstreamStatus(ctx, realPath)
+		response := gitStatusResponse{
+			Path:         realPath,
+			IsRepository: true,
+			Branch:       strings.TrimSpace(branch),
+			Head:         strings.TrimSpace(head),
+			Ahead:        ahead,
+			Behind:       behind,
+			Upstream:     upstream,
+			Files:        parseGitFileStatuses(statusPorcelain),
+			Truncated:    truncated,
+		}
+		if truncated {
+			response.TruncatedNote = "Git 输出过长，已截断展示。"
+		}
+		return response, nil
+	}
+
+	statusText, cut, err := runGitReadOnly(ctx, realPath, gitStatusOutputLimit, "status", "--short", "--", ".")
 	if err != nil {
 		return gitStatusResponse{}, err
 	}
@@ -418,9 +450,6 @@ func (r *Router) gitStatus(ctx context.Context, realPath string) (gitStatusRespo
 	}
 	truncated = truncated || cut
 
-	branch, _, _ := runGitReadOnly(ctx, realPath, 4*1024, "branch", "--show-current")
-	head, _, _ := runGitReadOnly(ctx, realPath, 4*1024, "rev-parse", "--short", "HEAD")
-
 	response := gitStatusResponse{
 		Path:         realPath,
 		IsRepository: true,
@@ -437,6 +466,23 @@ func (r *Router) gitStatus(ctx context.Context, realPath string) (gitStatusRespo
 		response.TruncatedNote = "Git 输出过长，已截断展示。"
 	}
 	return response, nil
+}
+
+func gitUpstreamStatus(ctx context.Context, realPath string) (int, int, string) {
+	upstreamOutput, _, err := runGitReadOnly(ctx, realPath, 4*1024, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	if err != nil {
+		return 0, 0, ""
+	}
+	upstream := strings.TrimSpace(upstreamOutput)
+	if upstream == "" {
+		return 0, 0, ""
+	}
+	counts, _, err := runGitReadOnly(ctx, realPath, 4*1024, "rev-list", "--left-right", "--count", upstream+"...HEAD")
+	if err != nil {
+		return 0, 0, upstream
+	}
+	ahead, behind := parseAheadBehindCounts(counts)
+	return ahead, behind, upstream
 }
 
 func (r *Router) gitAction(ctx context.Context, realPath string, action string, files []string, patch string) (gitStatusResponse, error) {

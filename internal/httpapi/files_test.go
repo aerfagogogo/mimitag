@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,38 @@ func TestFileReadRejectsOutsidePathWithoutLeakingDetails(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), outside) {
 		t.Fatalf("拒绝响应不应泄漏外部路径：%s", rec.Body.String())
+	}
+}
+
+func TestFileReadReportsPermissionDeniedWithActionableGuidance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 不用 Unix 权限位模拟 TCC 拒绝")
+	}
+	server := newTestServer(t)
+	projectDir := configuredProjectPath(t, server.handler)
+	filePath := filepath.Join(projectDir, "locked.txt")
+	if err := os.WriteFile(filePath, []byte("secret"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filePath, 0o644) })
+
+	rec, _ := readPreviewFile(t, server.handler, filePath)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("OS 拒绝访问应返回 403，got=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 路径明明在授权范围内，OS 拒绝时不能再报“不在允许范围内”，否则用户会去改 browse_roots。
+	if strings.Contains(rec.Body.String(), "不在允许范围内") {
+		t.Fatalf("授权路径的权限拒绝不应报成 allowlist 问题：%s", rec.Body.String())
+	}
+	if runtime.GOOS == "darwin" {
+		if !strings.Contains(rec.Body.String(), "完全磁盘访问") {
+			t.Fatalf("macOS 权限拒绝应引导用户授予完全磁盘访问：%s", rec.Body.String())
+		}
+		return
+	}
+	if strings.Contains(rec.Body.String(), "完全磁盘访问") ||
+		!strings.Contains(rec.Body.String(), "运行用户") {
+		t.Fatalf("非 macOS 权限拒绝应提示检查服务运行用户权限：%s", rec.Body.String())
 	}
 }
 
@@ -144,6 +177,102 @@ func TestFileReadRejectsOutsideImagePath(t *testing.T) {
 	rec, _ := readPreviewFile(t, server.handler, outside)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("普通外部图片仍应被拒绝，got=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestFileReadAllowsCodexClipboardTemporaryImageOnMacOS(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Codex 桌面剪贴板临时路径只在 macOS 放行")
+	}
+
+	server := newTestServer(t)
+	imagePath := filepath.Join(os.TempDir(), "codex-clipboard-9ba62714-bcfb-4693-805b-1be6e284e924.png")
+	t.Cleanup(func() { _ = os.Remove(imagePath) })
+	imageBytes := append(
+		[]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A},
+		make([]byte, 512)...,
+	)
+	if err := os.WriteFile(imagePath, imageBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, body := readPreviewFile(t, server.handler, imagePath)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("可信 Codex 剪贴板图片应可读取，got=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if body["name"] != filepath.Base(imagePath) || body["content_type"] != "image/png" {
+		t.Fatalf("响应应保留剪贴板图片名称并验证真实图片类型：%v", body)
+	}
+}
+
+func TestAllowedCodexClipboardImagePathRejectsUnsafeVariants(t *testing.T) {
+	tempRoot := t.TempDir()
+	validName := "codex-clipboard-9ba62714-bcfb-4693-805b-1be6e284e924.png"
+	validPath := filepath.Join(tempRoot, validName)
+	if err := os.WriteFile(validPath, []byte("not inspected by path resolver"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := allowedCodexClipboardImagePath(validPath, tempRoot); !ok || got == "" {
+		t.Fatalf("严格命名的普通文件应通过路径阶段校验：got=%q ok=%v", got, ok)
+	}
+
+	invalidNamePath := filepath.Join(tempRoot, "codex-clipboard-not-a-uuid.png")
+	if err := os.WriteFile(invalidNamePath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := allowedCodexClipboardImagePath(invalidNamePath, tempRoot); ok {
+		t.Fatal("非 UUID 剪贴板文件名不应放行")
+	}
+
+	outsideRoot := t.TempDir()
+	outsidePath := filepath.Join(outsideRoot, validName)
+	if err := os.WriteFile(outsidePath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := allowedCodexClipboardImagePath(outsidePath, tempRoot); ok {
+		t.Fatal("临时授权根之外的同名文件不应放行")
+	}
+
+	nestedDir := filepath.Join(tempRoot, "nested")
+	if err := os.Mkdir(nestedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nestedPath := filepath.Join(nestedDir, validName)
+	if err := os.WriteFile(nestedPath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := allowedCodexClipboardImagePath(nestedPath, tempRoot); ok {
+		t.Fatal("只允许临时目录直属的 Codex 剪贴板图片，不能递归放行子目录")
+	}
+
+	targetPath := filepath.Join(tempRoot, "target.png")
+	if err := os.WriteFile(targetPath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(tempRoot, "codex-clipboard-15031bdc-111a-4669-b3e6-4ef5f2094829.png")
+	if err := os.Symlink(targetPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := allowedCodexClipboardImagePath(symlinkPath, tempRoot); ok {
+		t.Fatal("符号链接伪装成剪贴板图片时不应放行")
+	}
+}
+
+func TestFileReadRejectsFakeCodexClipboardImageContentOnMacOS(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Codex 桌面剪贴板临时路径只在 macOS 放行")
+	}
+
+	server := newTestServer(t)
+	fakeImagePath := filepath.Join(os.TempDir(), "codex-clipboard-f64f3119-46f6-479a-b93d-abc5d81f879f.png")
+	t.Cleanup(func() { _ = os.Remove(fakeImagePath) })
+	if err := os.WriteFile(fakeImagePath, []byte("plain text with a png extension"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, _ := readPreviewFile(t, server.handler, fakeImagePath)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("只有扩展名、没有图片文件头的临时文件应被拒绝，got=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

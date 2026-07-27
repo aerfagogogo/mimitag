@@ -57,4 +57,6 @@ Swift Package Manager 依赖：
 
 iOS 工作区中的 Codex 运行时入口使用 OpenAI 官方 macOS 应用资源包中的 `icon-chatgpt.png`，仅按 iOS 显示倍率等比缩小，用于帮助用户识别其使用 ChatGPT 账号连接的 Codex 运行时。该图标及相关商标归 OpenAI 所有，不代表 OpenAI 对本项目的赞助或背书。
 
+iOS 首次连接页使用 GitHub 官方 Brand Toolkit 提供的黑白 Invertocat 标识，仅用于链接本项目的公开 Release 页面。该标识及 GitHub 商标归 GitHub, Inc. 所有，不代表 GitHub 对本项目的赞助或背书。
+
 如果你认为本仓库的代码、文档、视觉设计或宣传文案和你的项目过于相似，欢迎通过 GitHub Issue 说明具体文件、截图或链接。我们会优先处理可以明确定位的归属、许可证和混淆风险。

@@ -125,12 +125,23 @@ func fileAccessPreflightTargets(cfg config.Config, registry *projects.Registry, 
 
 	for _, root := range cfg.BrowseRoots {
 		add(root, false)
-		if darwin && pathContains(root, home) {
+		if !darwin {
+			continue
+		}
+		if pathContains(root, home) {
 			// Home 顶层可读不代表这些 TCC 保护域已授权；只读取一个目录项，
 			// 足以尽早触发系统提示，又不会递归扫描或读取文件内容。
 			for _, name := range []string{"Desktop", "Documents", "Downloads"} {
 				add(filepath.Join(home, name), true)
 			}
+		}
+		photosLibrary := filepath.Join(home, "Pictures", "Photos Library.photoslibrary")
+		if pathContains(root, photosLibrary) {
+			// 照片图库（.photoslibrary）是独立的 TCC 保护 bundle：路径能 stat、却无法
+			// open/read，缺少完全磁盘访问时 iPad 端预览图片会以 403 失败。提前预检可让
+			// /api/doctor 直接报出“需要完全磁盘访问”。Pictures 单独作为 browse root
+			// 时也必须覆盖，不能只处理整个 Home 被授权的情况。
+			add(photosLibrary, true)
 		}
 	}
 	for _, root := range cfg.ScanRoots {

@@ -180,6 +180,15 @@ struct ConversationMessageContent: View {
 
     @ViewBuilder
     private func userImageGallery(style: MarkdownStyle) -> some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+        // 图片网格位于用户气泡之外；加载/失败状态必须使用页面中性表面，
+        // 避免气泡语义色渗入独立媒体状态卡。
+        let statusStyle = MarkdownStyle.make(
+            role: .assistant,
+            colorScheme: colorScheme,
+            fontScale: themeStore.fontScale,
+            tokens: tokens
+        )
         if userImageSources.count > 1 {
             LazyVGrid(
                 columns: [
@@ -194,6 +203,7 @@ struct ConversationMessageContent: View {
                         source: source,
                         title: nil,
                         style: style,
+                        statusStyle: statusStyle,
                         maxHeight: 208,
                         showsCaption: false,
                         fillsAvailableWidth: true
@@ -208,6 +218,7 @@ struct ConversationMessageContent: View {
                     source: source,
                     title: nil,
                     style: style,
+                    statusStyle: statusStyle,
                     maxHeight: 320,
                     showsCaption: false,
                     fillsAvailableWidth: true
@@ -282,7 +293,9 @@ struct ConversationMessageContent: View {
                 SkillInvocationCard(
                     metadata: SkillVisualMetadata(name: name, path: path, capability: capability),
                     sendStatus: message.sendStatus,
-                    usesUserBubbleContrast: true
+                    // 浅色用户气泡是中性浅底，必须使用主题深色文字；
+                    // 只有深色主题继续使用原有的高对比白字样式。
+                    usesUserBubbleContrast: themeStore.tokens(for: colorScheme).resolvedScheme == .dark
                 )
                 .environmentObject(themeStore)
             }
@@ -456,10 +469,7 @@ struct ConversationMessageContent: View {
 
     private var bubbleBorder: Color {
         let tokens = themeStore.tokens(for: colorScheme)
-        if message.role == .user, tokens.preset == .codex {
-            return Color.white.opacity(tokens.resolvedScheme == .light ? 0.12 : 0.08)
-        }
-        return tokens.border.opacity(message.role == .assistant ? 0.58 : 0.42)
+        return tokens.border.opacity(message.role == .assistant ? 0.58 : 0.54)
     }
 
     private var bubbleShadowColor: Color {
@@ -475,18 +485,14 @@ struct ConversationMessageContent: View {
 
     private var foreground: Color {
         let tokens = themeStore.tokens(for: colorScheme)
-        if message.role == .user, tokens.preset == .codex {
-            return userBubbleForeground
-        }
-        return tokens.primaryText
+        return message.role == .user ? userBubbleForeground : tokens.primaryText
     }
 
     private var timestampForeground: Color? {
-        let tokens = themeStore.tokens(for: colorScheme)
-        guard message.role == .user, tokens.preset == .codex else {
+        guard message.role == .user else {
             return nil
         }
-        return userBubbleForeground.opacity(0.72)
+        return userBubbleForeground.opacity(0.64)
     }
 
     private var userBubbleForeground: Color {

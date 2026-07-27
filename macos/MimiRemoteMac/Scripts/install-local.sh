@@ -4,7 +4,35 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
 source_app="$repo_root/.build/MimiRemoteMac/Build/Products/Release/Mimi Remote Mac.app"
-destination="${1:-$HOME/Applications/Mimi Remote Mac.app}"
+
+# Default to wherever the app is already installed. Picking a fixed default
+# instead is how a rebuild silently lands beside the running copy: the new
+# version installs, the login item keeps launching agentd out of the old
+# bundle, and everything looks deployed while none of it is.
+default_destination() {
+  local candidates=("/Applications/Mimi Remote Mac.app" "$HOME/Applications/Mimi Remote Mac.app")
+  local found=()
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    [[ -d "$candidate" ]] && found+=("$candidate")
+  done
+  case ${#found[@]} in
+    0) printf '%s\n' "$HOME/Applications/Mimi Remote Mac.app" ;;
+    1) printf '%s\n' "${found[0]}" ;;
+    *)
+      echo "检测到多处已安装，请显式指定目标：" >&2
+      printf '  %s\n' "${found[@]}" >&2
+      return 1
+      ;;
+  esac
+}
+
+if [[ $# -ge 1 ]]; then
+  destination="$1"
+else
+  destination="$(default_destination)" || exit 2
+  echo "沿用已安装位置：$destination"
+fi
 destination_parent="$(dirname "$destination")"
 
 if [[ ! -d "$source_app" ]]; then

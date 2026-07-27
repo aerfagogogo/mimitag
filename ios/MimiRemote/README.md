@@ -70,7 +70,7 @@ agentd doctor
 
 App 可以保存多台 Mac，但同一时间只连接一台。每台 Mac 的 Token 存入独立 Keychain account；UserDefaults 只保存显示名、Endpoint、最近成功时间和当前档案 ID。已有档案可在设置中重命名，名称会 trim 且最多 48 个字符；重命名只更新本地非敏感元数据，不读取 Keychain、不切换 Endpoint，也不重建 WebSocket。“忘记当前 Mac”和删除非当前档案都会先明确提示将删除系统 Keychain 访问码、需要重新扫码配对，只有用户二次确认后才执行。旧版单 Endpoint/Token 会按 Keychain-first 顺序迁移，失败时继续保留原连接。iPad 客户端只保存 Mac 的 Tailscale Endpoint，旧版本保存过的备用公网配置会在启动时自动清理。当前支持 `http://100.x.x.x:8787` 这类 Tailscale 裸 IP；由于 iOS 27 实测中 `NSAllowsLocalNetworking` 仍会拦截该地址，系统层使用 `NSAllowsArbitraryLoads`，应用层在设置、REST 和 WebSocket 三层统一拒绝公网 HTTP。公开发布仍推荐评估 MagicDNS HTTPS，减少私网 HTTP 的运维解释成本。
 
-会话提醒和运行态本地通知支持点击回到目标会话。系统通知 payload 只保存版本、profile/project/session 路由，不保存 Token 或明文 Endpoint；只有当前活动 Mac 可以直接打开，其他档案的通知只提示用户到设置中手动切换，不会在后台读取 Token 或自动跨连接。
+会话提醒和运行态本地通知支持点击回到目标会话。App 前台已经显示目标会话时，Codex 与 Claude 的审批、补充信息、完成和失败通知会保持静默，避免与会话内状态重复打断；列表页、其他会话、设置页或后台状态仍正常提醒。系统通知 payload 只保存版本、profile/project/session 路由，不保存 Token 或明文 Endpoint；只有当前活动 Mac 可以直接打开，其他档案的通知只提示用户到设置中手动切换，不会在后台读取 Token 或自动跨连接。
 
 App target 打包 `Resources/PrivacyInfo.xcprivacy`：声明不跟踪、不配置跟踪域、不由项目开发者收集用户数据；`UserDefaults` 只用于 Endpoint、界面偏好和本地会话控制状态，因此按 Apple 的 approved reason `CA92.1` 声明。发布前运行 `bash ./scripts/check-ios-privacy-manifest.sh`，并以 App Store Connect 的实际隐私报告为最终准入依据。Apple 规则入口：[Privacy manifest files](https://developer.apple.com/documentation/bundleresources/privacy-manifest-files)、[Required reason API](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)。
 

@@ -3,7 +3,7 @@ import UIKit
 
 struct ModelReasoningGridSelection: Equatable {
     let modelID: String
-    let effort: CodexAppServerReasoningEffort
+    let effort: CodexAppServerReasoningEffort?
 }
 
 enum ModelReasoningGridKind: Equatable {
@@ -13,31 +13,57 @@ enum ModelReasoningGridKind: Equatable {
 
 struct ModelReasoningGridLayout: Equatable {
     let kind: ModelReasoningGridKind
-    let rows: [CodexAppServerModelOption]
+    let models: [CodexAppServerModelOption]
     let efforts: [CodexAppServerReasoningEffort]
     let showsFastMode: Bool
 
-    func row(matching modelID: String?) -> CodexAppServerModelOption? {
+    var modelRowCount: Int {
+        models.count
+    }
+
+    var effortColumnCount: Int {
+        efforts.count
+    }
+
+    func model(matching modelID: String?) -> CodexAppServerModelOption? {
         guard let modelID else { return nil }
-        switch kind {
-        case .codex:
-            return rows.first { $0.model.caseInsensitiveCompare(modelID) == .orderedSame }
-        case .claude:
-            guard let family = ModelReasoningGridCatalog.claudeFamily(for: modelID) else { return nil }
-            return rows.first { ModelReasoningGridCatalog.claudeFamily(for: $0.model) == family }
-        }
+        return models.first { $0.model.caseInsensitiveCompare(modelID) == .orderedSame }
     }
 
     func contains(modelID: String?) -> Bool {
-        row(matching: modelID) != nil
+        model(matching: modelID) != nil
+    }
+
+    func selection(
+        modelRow: Int,
+        effortColumn: Int
+    ) -> ModelReasoningGridSelection? {
+        guard models.indices.contains(modelRow),
+              efforts.indices.contains(effortColumn)
+        else {
+            return nil
+        }
+        return ModelReasoningGridSelection(
+            modelID: models[modelRow].model,
+            effort: efforts[effortColumn]
+        )
     }
 }
 
 enum ModelReasoningGridCatalog {
-    static let codexModelOrder = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
-    static let codexEfforts: [CodexAppServerReasoningEffort] = [.medium, .high, .xhigh]
-    static let claudeFamilyOrder = ["haiku", "sonnet", "opus", "fable"]
-    static let claudeEfforts: [CodexAppServerReasoningEffort] = [.minimal, .low, .medium, .high]
+    static let maximumModelCount = 3
+    static let codexStandardEfforts: [CodexAppServerReasoningEffort] = [
+        .medium,
+        .high,
+        .xhigh,
+        .ultra
+    ]
+    static let claudeStandardEfforts: [CodexAppServerReasoningEffort] = [
+        .medium,
+        .high,
+        .xhigh,
+        .max
+    ]
 
     static func effectiveModelID(
         selectedModelID: String?,
@@ -49,8 +75,8 @@ enum ModelReasoningGridCatalog {
             return selectedModelID
         }
 
-        // model == nil 表示沿用服务端默认模型；展示层必须解析成真实模型，
-        // 否则默认 GPT-5.6 会被误判为普通模型，重复显示独立推理入口。
+        // model == nil 表示沿用服务端默认模型；只在展示层解析真实模型，
+        // 提交时仍保留 nil，避免把动态默认值固化进草稿。
         let visibleOptions = options.filter { !$0.hidden }
         return (visibleOptions.first(where: \.isDefault) ?? visibleOptions.first)?.model
     }
@@ -63,31 +89,25 @@ enum ModelReasoningGridCatalog {
         let runtime = runtimeProvider?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        let kind: ModelReasoningGridKind = runtime == "claude" ? .claude : .codex
+        let fallbackOptions = kind == .claude
+            ? CodexAppServerModelOption.builtInClaudeFallback
+            : CodexAppServerModelOption.builtInFallback
+        let source = visible.isEmpty ? fallbackOptions : visible
 
-        if runtime == "claude" {
-            let source = visible.isEmpty ? CodexAppServerModelOption.builtInClaudeFallback : visible
-            let rows = claudeFamilyOrder.compactMap { family in
-                preferredClaudeOption(family: family, options: source)
-            }
-            let resolvedRows = rows.isEmpty ? Array(source.prefix(3)) : rows
-            return ModelReasoningGridLayout(
-                kind: .claude,
-                rows: resolvedRows,
-                efforts: supportedEfforts(in: resolvedRows, fallback: claudeEfforts),
-                showsFastMode: false
-            )
-        }
-
-        let rows = codexModelOrder.compactMap { id in
-            visible.first { $0.model.caseInsensitiveCompare(id) == .orderedSame }
-                ?? CodexAppServerModelOption.builtInFallback.first { $0.model == id }
-        }
+        // 模型顺序完全沿用 model/list；能力策略只负责决定横向四列，不重排模型。
         return ModelReasoningGridLayout(
-            kind: .codex,
-            rows: rows,
-            efforts: supportedEfforts(in: rows, fallback: codexEfforts),
-            showsFastMode: true
+            kind: kind,
+            models: Array(source.prefix(maximumModelCount)),
+            efforts: standardEfforts(for: kind),
+            showsFastMode: kind == .codex
         )
+    }
+
+    static func standardEfforts(
+        for kind: ModelReasoningGridKind
+    ) -> [CodexAppServerReasoningEffort] {
+        kind == .claude ? claudeStandardEfforts : codexStandardEfforts
     }
 
     static func triggerTitle(
@@ -95,149 +115,146 @@ enum ModelReasoningGridCatalog {
         effort: CodexAppServerReasoningEffort,
         layout: ModelReasoningGridLayout
     ) -> String? {
-        guard let option = layout.row(matching: modelID) else { return nil }
-        let modelTitle: String
-        switch layout.kind {
-        case .codex:
-            modelTitle = "5.6 \(shortTitle(for: option, kind: .codex))"
-        case .claude:
-            modelTitle = shortTitle(for: option, kind: .claude)
-        }
-        return "\(modelTitle) · \(effortTitle(effort))"
+        guard let option = layout.model(matching: modelID) else { return nil }
+        return "\(shortTitle(for: option, kind: layout.kind)) · \(effortTitle(effort))"
     }
 
     static func shortTitle(
         for option: CodexAppServerModelOption,
-        kind: ModelReasoningGridKind
+        kind _: ModelReasoningGridKind
     ) -> String {
-        guard kind == .claude else {
-            return shortTitle(for: option.model, kind: kind)
-        }
-
         let title = option.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty,
-              title.caseInsensitiveCompare(option.model) != .orderedSame
-        else {
-            return shortTitle(for: option.model, kind: kind)
-        }
-
-        // Claude alias 会随 CLI 升级指向新版本，版本号必须来自服务端模型目录，
-        // 不能按 family 写死，否则旧 bridge 的具体模型会被展示成尚未使用的新版本。
-        if let prefix = title.range(of: "Claude ", options: [.anchored, .caseInsensitive]) {
-            let stripped = String(title[prefix.upperBound...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return stripped.isEmpty ? shortTitle(for: option.model, kind: kind) : stripped
-        }
-        return title
-    }
-
-    static func shortTitle(for modelID: String, kind: ModelReasoningGridKind) -> String {
-        switch kind {
-        case .codex:
-            switch modelID.lowercased() {
-            case "gpt-5.6-sol": return "Sol"
-            case "gpt-5.6-terra": return "Terra"
-            case "gpt-5.6-luna": return "Luna"
-            default: return modelID
-            }
-        case .claude:
-            switch claudeFamily(for: modelID) {
-            case "fable": return "Fable"
-            case "sonnet": return "Sonnet"
-            case "opus": return "Opus"
-            case "haiku": return "Haiku"
-            default: return modelID
-            }
-        }
+        return title.isEmpty ? option.model : title
     }
 
     static func effortTitle(_ effort: CodexAppServerReasoningEffort) -> String {
+        // 产品档位固定使用英文名称，协议值仍保持原样，尤其不互换 Max 与 Ultra。
         switch effort {
-        case .none: return L10n.text("ui.close")
-        case .minimal: return L10n.text("ui.lowest")
-        case .low: return L10n.text("ui.low")
-        case .medium: return L10n.text("ui.in")
-        case .high: return L10n.text("ui.high")
-        case .xhigh: return L10n.text("ui.highest")
+        case .none:
+            return "None"
+        case .minimal:
+            return "Minimal"
+        case .low:
+            return "Light"
+        case .medium:
+            return "Medium"
+        case .high:
+            return "High"
+        case .xhigh:
+            return "Extra High"
+        case .max:
+            return "Max"
+        case .ultra:
+            return "Ultra"
         }
-    }
-
-    static func supports(_ effort: CodexAppServerReasoningEffort, option: CodexAppServerModelOption) -> Bool {
-        option.supportedReasoningEfforts.isEmpty || option.supportedReasoningEfforts.contains(effort.rawValue)
     }
 
     static func supports(
         _ effort: CodexAppServerReasoningEffort,
         option: CodexAppServerModelOption,
-        layout: ModelReasoningGridLayout
+        kind: ModelReasoningGridKind? = nil
     ) -> Bool {
-        let isGridEffortAvailable = !layout.contains(modelID: option.model) || layout.efforts.contains(effort)
-        return isGridEffortAvailable && supports(effort, option: option)
+        let isClaude = kind == .claude || option.runtimeProvider?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == "claude"
+        if isClaude {
+            // Claude 的空数组明确表示该模型不支持原生 reasoning effort。
+            return option.supportedReasoningEfforts.contains(effort.rawValue)
+        }
+        // Codex 旧服务未返回元数据时，使用本地标准策略向后兼容。
+        return option.supportedReasoningEfforts.isEmpty
+            || option.supportedReasoningEfforts.contains(effort.rawValue)
     }
 
-    static func supportedEfforts(
-        for option: CodexAppServerModelOption?,
-        layout: ModelReasoningGridLayout
+    static func allSupportedEfforts(
+        for option: CodexAppServerModelOption?
     ) -> [CodexAppServerReasoningEffort] {
         guard let option else {
-            // 未知/自定义模型沿用开发者模式原有入口，不凭本地目录擅自限制服务端能力。
             return CodexAppServerReasoningEffort.allCases
         }
         return CodexAppServerReasoningEffort.allCases.filter {
-            supports($0, option: option, layout: layout)
+            supports($0, option: option)
         }
     }
 
-    static func reasoningEffortForModelSelection(
+    static func visibleEfforts(
+        for option: CodexAppServerModelOption?,
+        layout: ModelReasoningGridLayout
+    ) -> [CodexAppServerReasoningEffort] {
+        guard let option else { return [] }
+        return layout.efforts.filter { supports($0, option: option, kind: layout.kind) }
+    }
+
+    static func isStandardEffortAvailable(
+        _ effort: CodexAppServerReasoningEffort,
+        option: CodexAppServerModelOption,
+        layout: ModelReasoningGridLayout
+    ) -> Bool {
+        layout.efforts.contains(effort) && supports(effort, option: option, kind: layout.kind)
+    }
+
+    static func normalizedVisibleEffort(
         option: CodexAppServerModelOption?,
         current: CodexAppServerReasoningEffort?,
         layout: ModelReasoningGridLayout
     ) -> CodexAppServerReasoningEffort? {
-        guard let option else {
-            return nil
+        let visible = visibleEfforts(for: option, layout: layout)
+        guard !visible.isEmpty else { return nil }
+
+        if let current, visible.contains(current) {
+            return current
         }
-        if let defaultEffort = option.defaultReasoningEffort.flatMap(CodexAppServerReasoningEffort.init(rawValue:)),
-           supports(defaultEffort, option: option, layout: layout) {
+        if let defaultEffort = option?.defaultReasoningEffort
+            .flatMap(CodexAppServerReasoningEffort.init(rawValue:)),
+           visible.contains(defaultEffort) {
             return defaultEffort
         }
-        guard let current, supports(current, option: option, layout: layout) else {
+        if visible.contains(.medium) {
+            return .medium
+        }
+        return visible.first
+    }
+
+    static func applySelection(
+        option: CodexAppServerModelOption,
+        effort: CodexAppServerReasoningEffort?,
+        preservesServerDefault: Bool,
+        fallbackRuntimeProvider: String?,
+        to turnOptions: inout CodexAppServerTurnOptions
+    ) {
+        turnOptions.runtimeProvider = option.runtimeProvider ?? fallbackRuntimeProvider
+        turnOptions.model = preservesServerDefault ? nil : option.model
+        turnOptions.modelProvider = preservesServerDefault ? nil : option.provider
+        turnOptions.reasoningEffort = effort
+
+        if CodexAppServerSessionRuntime.normalizedRuntimeProvider(turnOptions.runtimeProvider) == "claude" {
+            turnOptions.serviceTier = nil
+        }
+    }
+
+    static func serviceTierForFastMode(_ isEnabled: Bool) -> String? {
+        isEnabled ? "priority" : nil
+    }
+
+    static func normalizedStandardServiceTier(
+        _ serviceTier: String?,
+        runtimeProvider: String?
+    ) -> String? {
+        guard CodexAppServerSessionRuntime.normalizedRuntimeProvider(runtimeProvider) != "claude",
+              serviceTier == "priority"
+        else {
             return nil
         }
-        return current
-    }
-
-    static func claudeFamily(for modelID: String) -> String? {
-        let normalized = modelID.lowercased()
-        return claudeFamilyOrder.first { family in
-            normalized == family || normalized.contains("-\(family)-") || normalized.hasSuffix("-\(family)")
-        }
-    }
-
-    private static func preferredClaudeOption(
-        family: String,
-        options: [CodexAppServerModelOption]
-    ) -> CodexAppServerModelOption? {
-        let matches = options.filter { claudeFamily(for: $0.model) == family }
-        return matches.first(where: \CodexAppServerModelOption.isDefault)
-            ?? matches.first(where: { $0.model.lowercased() != family })
-            ?? matches.first
-    }
-
-    private static func supportedEfforts(
-        in rows: [CodexAppServerModelOption],
-        fallback: [CodexAppServerReasoningEffort]
-    ) -> [CodexAppServerReasoningEffort] {
-        let supported = Set(rows.flatMap(\.supportedReasoningEfforts))
-        guard !supported.isEmpty else { return fallback }
-        return CodexAppServerReasoningEffort.allCases.filter { supported.contains($0.rawValue) }
+        return "priority"
     }
 }
 
 struct ModelReasoningGridPicker: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     let options: [CodexAppServerModelOption]
     let layout: ModelReasoningGridLayout
@@ -245,66 +262,94 @@ struct ModelReasoningGridPicker: View {
     let selectedModelID: String?
     let isRefreshing: Bool
     let isFastMode: Bool
-    let onSelect: (CodexAppServerModelOption, CodexAppServerReasoningEffort) -> Void
+    let onSelectModel: (CodexAppServerModelOption, CodexAppServerReasoningEffort?) -> Void
+    let onSelectDefaultModel: (CodexAppServerModelOption, CodexAppServerReasoningEffort?) -> Void
     let onFastModeChange: (Bool) -> Void
-    let onSelectModelOnly: (CodexAppServerModelOption?) -> Void
     let onRefresh: () -> Void
-
-    @State private var dragPoint: CGPoint?
-    @State private var previewSelection: ModelReasoningGridSelection?
-    @State private var lastHapticSelection: ModelReasoningGridSelection?
-    @State private var isDragging = false
-    @State private var gestureRevision = 0
-
-    // 每行保持 54pt；渠道只提供行列数据，手势、动效和可访问性统一由组件负责。
-    private let pickerWidth: CGFloat = 352
-    private let dragCancellationMargin: CGFloat = 12
-
-    private var rowLabelWidth: CGFloat {
-        layout.kind == .claude ? 68 : 52
-    }
-
-    private var gridHeight: CGFloat {
-        CGFloat(max(layout.rows.count, 1)) * 54
-    }
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
-        VStack(alignment: .leading, spacing: 8) {
-            header(tokens: tokens)
-            columnLabels(tokens: tokens)
-            HStack(spacing: 8) {
-                rowLabels(tokens: tokens)
-                grid(tokens: tokens)
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 8) {
+                ModelReasoningPickerHeader(
+                    options: visibleOptions,
+                    layout: layout,
+                    selection: selection,
+                    selectedModelID: selectedModelID,
+                    isRefreshing: isRefreshing,
+                    isFastMode: isFastMode,
+                    onSelectModel: onSelectModel,
+                    onSelectDefaultModel: onSelectDefaultModel,
+                    onFastModeChange: onFastModeChange,
+                    onRefresh: onRefresh
+                )
+
+                if dynamicTypeSize.isAccessibilitySize {
+                    ModelReasoningAccessiblePicker(
+                        layout: layout,
+                        selection: selection,
+                        onSelectModel: onSelectModel
+                    )
+                } else {
+                    ModelReasoningStandardGrid(
+                        layout: layout,
+                        selection: selection,
+                        onSelect: { option, effort in
+                            onSelectModel(option, effort)
+                        }
+                    )
+                }
             }
+            .padding(12)
         }
-        .padding(12)
-        .frame(width: pickerWidth)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(
+            minWidth: 320,
+            idealWidth: 400,
+            maxWidth: horizontalSizeClass == .compact ? .infinity : 420
+        )
+        .frame(maxHeight: 372)
         .background(tokens.surface)
-        .onChange(of: selection) { _, _ in
-            guard dragPoint == nil else { return }
-            previewSelection = nil
-        }
+        .accessibilityIdentifier("composer.modelPicker")
     }
 
-    private func header(tokens: ThemeTokens) -> some View {
+    private var visibleOptions: [CodexAppServerModelOption] {
+        options.filter { !$0.hidden }
+    }
+}
+
+private struct ModelReasoningPickerHeader: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let options: [CodexAppServerModelOption]
+    let layout: ModelReasoningGridLayout
+    let selection: ModelReasoningGridSelection
+    let selectedModelID: String?
+    let isRefreshing: Bool
+    let isFastMode: Bool
+    let onSelectModel: (CodexAppServerModelOption, CodexAppServerReasoningEffort?) -> Void
+    let onSelectDefaultModel: (CodexAppServerModelOption, CodexAppServerReasoningEffort?) -> Void
+    let onFastModeChange: (Bool) -> Void
+    let onRefresh: () -> Void
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
         HStack(spacing: 8) {
             Menu {
-                Button {
-                    onSelectModelOnly(nil)
-                } label: {
-                    Label(L10n.text("ui.default_model"), systemImage: "arrow.uturn.backward")
+                if let defaultOption {
+                    modelMenu(option: defaultOption, preservesServerDefault: true)
                 }
-                ForEach(visibleAllModels) { option in
-                    Button {
-                        onSelectModelOnly(option)
-                    } label: {
-                        Label(option.menuTitle, systemImage: option.model == selectedModelID ? "checkmark" : "cpu")
-                    }
+                ForEach(options) { option in
+                    modelMenu(option: option, preservesServerDefault: false)
                 }
                 Divider()
                 Button(action: onRefresh) {
-                    Label(isRefreshing ? L10n.text("ui.refreshing") : L10n.text("ui.refresh_model_list"), systemImage: "arrow.clockwise")
+                    Label(
+                        isRefreshing ? L10n.text("ui.refreshing") : L10n.text("ui.refresh_model_list"),
+                        systemImage: "arrow.clockwise"
+                    )
                 }
                 .disabled(isRefreshing)
             } label: {
@@ -316,20 +361,19 @@ struct ModelReasoningGridPicker: View {
                 .font(themeStore.uiFont(.caption, weight: .semibold))
                 .foregroundStyle(tokens.accent)
                 .padding(.horizontal, 10)
-                .frame(height: 30)
+                .frame(minHeight: 44)
                 .background(tokens.elevatedSurface.opacity(0.72), in: Capsule())
                 .overlay {
                     Capsule()
                         .strokeBorder(tokens.border.opacity(0.58), lineWidth: 0.75)
                 }
-                .padding(.vertical, 7)
                 .contentShape(Rectangle())
             }
             .menuStyle(.button)
             .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
             .accessibilityLabel(L10n.text("ui.all_models"))
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 8)
 
             if layout.showsFastMode {
                 Toggle(isOn: fastModeBinding) {
@@ -340,7 +384,7 @@ struct ModelReasoningGridPicker: View {
                     .font(themeStore.uiFont(.caption, weight: .semibold))
                     .foregroundStyle(isFastMode ? Color.white : tokens.accent)
                     .padding(.horizontal, 11)
-                    .frame(height: 30)
+                    .frame(minHeight: 44)
                     .background(
                         isFastMode ? tokens.accent : tokens.elevatedSurface.opacity(0.72),
                         in: Capsule()
@@ -352,7 +396,6 @@ struct ModelReasoningGridPicker: View {
                                 lineWidth: 0.75
                             )
                     }
-                    .padding(.vertical, 7)
                     .contentShape(Rectangle())
                 }
                 .toggleStyle(.button)
@@ -362,7 +405,53 @@ struct ModelReasoningGridPicker: View {
                 .accessibilityHint(L10n.text("ui.after_turning_it_on_the_priority_service_speed"))
             }
         }
-        .frame(height: 44)
+        .frame(minHeight: 44)
+    }
+
+    @ViewBuilder
+    private func modelMenu(
+        option: CodexAppServerModelOption,
+        preservesServerDefault: Bool
+    ) -> some View {
+        let efforts = ModelReasoningGridCatalog.visibleEfforts(for: option, layout: layout)
+        if efforts.isEmpty {
+            Button {
+                select(option: option, effort: nil, preservesServerDefault: preservesServerDefault)
+            } label: {
+                Label(
+                    preservesServerDefault ? L10n.text("ui.default_model") : option.menuTitle,
+                    systemImage: isSelected(option: option, effort: nil, preservesServerDefault: preservesServerDefault)
+                        ? "checkmark"
+                        : "cpu"
+                )
+            }
+        } else {
+            Menu {
+                ForEach(efforts) { effort in
+                    Button {
+                        select(option: option, effort: effort, preservesServerDefault: preservesServerDefault)
+                    } label: {
+                        Label(
+                            ModelReasoningGridCatalog.effortTitle(effort),
+                            systemImage: isSelected(
+                                option: option,
+                                effort: effort,
+                                preservesServerDefault: preservesServerDefault
+                            ) ? "checkmark" : "brain.head.profile"
+                        )
+                    }
+                }
+            } label: {
+                Label(
+                    preservesServerDefault ? L10n.text("ui.default_model") : option.menuTitle,
+                    systemImage: preservesServerDefault && selectedModelID == nil ? "checkmark" : "cpu"
+                )
+            }
+        }
+    }
+
+    private var defaultOption: CodexAppServerModelOption? {
+        options.first(where: \.isDefault) ?? options.first
     }
 
     private var fastModeBinding: Binding<Bool> {
@@ -376,41 +465,106 @@ struct ModelReasoningGridPicker: View {
         )
     }
 
-    private func columnLabels(tokens: ThemeTokens) -> some View {
+    private func select(
+        option: CodexAppServerModelOption,
+        effort: CodexAppServerReasoningEffort?,
+        preservesServerDefault: Bool
+    ) {
+        if preservesServerDefault {
+            onSelectDefaultModel(option, effort)
+        } else {
+            onSelectModel(option, effort)
+        }
+    }
+
+    private func isSelected(
+        option: CodexAppServerModelOption,
+        effort: CodexAppServerReasoningEffort?,
+        preservesServerDefault: Bool
+    ) -> Bool {
+        let modelMatches = preservesServerDefault
+            ? selectedModelID == nil
+            : selectedModelID?.caseInsensitiveCompare(option.model) == .orderedSame
+        if effort == nil {
+            return modelMatches && selection.modelID.caseInsensitiveCompare(option.model) == .orderedSame
+        }
+        return modelMatches && selection.effort == effort
+    }
+}
+
+private struct ModelReasoningStandardGrid: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    let layout: ModelReasoningGridLayout
+    let selection: ModelReasoningGridSelection
+    let onSelect: (CodexAppServerModelOption, CodexAppServerReasoningEffort) -> Void
+
+    @State private var dragPoint: CGPoint?
+    @State private var previewSelection: ModelReasoningGridSelection?
+    @State private var lastHapticSelection: ModelReasoningGridSelection?
+    @State private var isDragging = false
+    @State private var gestureRevision = 0
+
+    private let modelLabelWidth: CGFloat = 84
+    private let effortHeaderHeight: CGFloat = 56
+    private let modelRowHeight: CGFloat = 52
+    private let dragCancellationMargin: CGFloat = 12
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+        VStack(alignment: .leading, spacing: 0) {
+            effortHeaders(tokens: tokens)
+            HStack(spacing: 8) {
+                modelLabels(tokens: tokens)
+                grid(tokens: tokens)
+            }
+        }
+        .onChange(of: selection) { _, _ in
+            guard dragPoint == nil else { return }
+            previewSelection = nil
+        }
+    }
+
+    private func effortHeaders(tokens: ThemeTokens) -> some View {
         HStack(spacing: 8) {
-            Color.clear.frame(width: rowLabelWidth, height: 1)
+            Color.clear
+                .frame(width: modelLabelWidth, height: effortHeaderHeight)
             HStack(spacing: 0) {
                 ForEach(layout.efforts) { effort in
                     Text(ModelReasoningGridCatalog.effortTitle(effort))
                         .font(themeStore.uiFont(.caption, weight: .semibold))
-                        .foregroundStyle(activeSelection.effort == effort ? tokens.accent : tokens.secondaryText)
-                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(activeSelection.effort == effort ? tokens.accent : tokens.primaryText)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, minHeight: effortHeaderHeight)
                 }
             }
         }
     }
 
-    private func rowLabels(tokens: ThemeTokens) -> some View {
+    private func modelLabels(tokens: ThemeTokens) -> some View {
         VStack(spacing: 0) {
-            ForEach(layout.rows) { option in
+            ForEach(layout.models) { option in
                 Text(ModelReasoningGridCatalog.shortTitle(for: option, kind: layout.kind))
-                    .font(themeStore.uiFont(.subheadline, weight: .semibold))
-                    .foregroundStyle(activeSelection.modelID == option.model ? tokens.accent : tokens.primaryText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                    .frame(width: rowLabelWidth, alignment: .trailing)
-                    .frame(maxHeight: .infinity, alignment: .trailing)
+                    .font(themeStore.uiFont(.caption, weight: .semibold))
+                    .foregroundStyle(activeSelection.modelID == option.model ? tokens.accent : tokens.secondaryText)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: modelLabelWidth, alignment: .trailing)
+                    .frame(minHeight: modelRowHeight)
             }
         }
-        .frame(width: rowLabelWidth, height: gridHeight)
     }
 
     private func grid(tokens: ThemeTokens) -> some View {
         GeometryReader { proxy in
             let size = proxy.size
             let cellSize = CGSize(
-                width: size.width / CGFloat(max(layout.efforts.count, 1)),
-                height: size.height / CGFloat(max(layout.rows.count, 1))
+                width: size.width / CGFloat(max(layout.effortColumnCount, 1)),
+                height: size.height / CGFloat(max(layout.modelRowCount, 1))
             )
 
             ZStack {
@@ -419,26 +573,23 @@ struct ModelReasoningGridPicker: View {
 
                 gridLines(size: size, tokens: tokens)
 
+                // VoiceOver 与视觉顺序一致：先按模型从上到下，同一模型内按强度从左到右。
                 VStack(spacing: 0) {
-                    ForEach(Array(layout.rows.enumerated()), id: \.element.id) { rowIndex, option in
+                    ForEach(layout.models) { option in
                         HStack(spacing: 0) {
-                            ForEach(Array(layout.efforts.enumerated()), id: \.element.id) { columnIndex, effort in
-                                gridCell(
-                                    option: option,
-                                    effort: effort,
-                                    row: rowIndex,
-                                    column: columnIndex,
-                                    tokens: tokens
-                                )
-                                .frame(width: cellSize.width, height: cellSize.height)
+                            ForEach(layout.efforts) { effort in
+                                gridCell(option: option, effort: effort, tokens: tokens)
+                                    .frame(width: cellSize.width, height: cellSize.height)
                             }
                         }
                     }
                 }
 
-                selectionLens(tokens: tokens)
-                    .position(dragPoint ?? center(for: activeSelection, size: size))
-                    .allowsHitTesting(false)
+                if let lensPosition = dragPoint ?? center(for: activeSelection, size: size) {
+                    selectionLens(tokens: tokens)
+                        .position(lensPosition)
+                        .allowsHitTesting(false)
+                }
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -448,22 +599,23 @@ struct ModelReasoningGridPicker: View {
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .simultaneousGesture(dragGesture(size: size))
         }
-        .frame(height: gridHeight)
+        .frame(height: CGFloat(layout.modelRowCount) * modelRowHeight)
     }
 
     private func gridCell(
         option: CodexAppServerModelOption,
         effort: CodexAppServerReasoningEffort,
-        row: Int,
-        column: Int,
         tokens: ThemeTokens
     ) -> some View {
+        let isAvailable = ModelReasoningGridCatalog.isStandardEffortAvailable(
+            effort,
+            option: option,
+            layout: layout
+        )
         let candidate = ModelReasoningGridSelection(modelID: option.model, effort: effort)
-        let selected = activeSelection == candidate
-        let supported = ModelReasoningGridCatalog.supports(effort, option: option)
+        let selected = isAvailable && activeSelection == candidate
 
         return Button {
-            guard supported else { return }
             commit(candidate, option: option)
         } label: {
             ZStack {
@@ -473,35 +625,43 @@ struct ModelReasoningGridPicker: View {
                         .padding(4)
                 }
                 Circle()
-                    .fill(selected ? tokens.accent.opacity(0.28) : tokens.tertiaryText.opacity(supported ? 0.32 : 0.12))
+                    .fill(
+                        selected
+                            ? tokens.accent.opacity(0.3)
+                            : tokens.tertiaryText.opacity(isAvailable ? 0.34 : 0.12)
+                    )
                     .frame(width: selected ? 8 : 6, height: selected ? 8 : 6)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
-        .disabled(!supported)
-        .accessibilityLabel(L10n.format(
-            "ui.value_reasoning_strength_value",
-            ModelReasoningGridCatalog.shortTitle(for: option, kind: layout.kind),
-            ModelReasoningGridCatalog.effortTitle(effort)
-        ))
-        .accessibilityValue(selected ? L10n.text("ui.selected") : L10n.text("ui.not_selected"))
-        .accessibilityHint(L10n.text("ui.double_click_to_select_you_can_also_drag"))
+        .disabled(!isAvailable)
+        .hoverEffect(.highlight)
+        .accessibilityLabel(
+            "\(ModelReasoningGridCatalog.shortTitle(for: option, kind: layout.kind)), "
+                + ModelReasoningGridCatalog.effortTitle(effort)
+        )
+        .accessibilityValue(
+            isAvailable
+                ? (selected ? L10n.text("ui.selected") : L10n.text("ui.not_selected"))
+                : L10n.text("ui.not_available")
+        )
+        .accessibilityHint(isAvailable ? L10n.text("ui.select_the_model_to_use_in_the_next") : "")
     }
 
     private func gridLines(size: CGSize, tokens: ThemeTokens) -> some View {
         Path { path in
-            if layout.efforts.count > 1 {
-                for column in 1..<layout.efforts.count {
-                    let x = size.width * CGFloat(column) / CGFloat(layout.efforts.count)
+            if layout.effortColumnCount > 1 {
+                for column in 1..<layout.effortColumnCount {
+                    let x = size.width * CGFloat(column) / CGFloat(layout.effortColumnCount)
                     path.move(to: CGPoint(x: x, y: 0))
                     path.addLine(to: CGPoint(x: x, y: size.height))
                 }
             }
-            if layout.rows.count > 1 {
-                for row in 1..<layout.rows.count {
-                    let y = size.height * CGFloat(row) / CGFloat(layout.rows.count)
+            if layout.modelRowCount > 1 {
+                for row in 1..<layout.modelRowCount {
+                    let y = size.height * CGFloat(row) / CGFloat(layout.modelRowCount)
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: size.width, y: y))
                 }
@@ -529,24 +689,21 @@ struct ModelReasoningGridPicker: View {
                 .offset(x: -5, y: -5)
         }
         .scaleEffect(!isDragging || reduceMotion ? 1 : 1.06)
-        .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.22, dampingFraction: 1), value: isDragging)
+        .animation(
+            reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.22, dampingFraction: 1),
+            value: isDragging
+        )
     }
 
     private func dragGesture(size: CGSize) -> some Gesture {
-        // 单击交给格子 Button；8pt 后才认定为拖动，避免一次点击同时走两条提交链路。
         DragGesture(minimumDistance: 8)
             .onChanged { value in
                 if !isDragging {
                     isDragging = true
                     gestureRevision += 1
                 }
-                let point = rubberBanded(value.location, size: size)
-                dragPoint = point
-                guard let candidate = candidate(at: value.location, size: size),
-                      let option = layout.rows.first(where: { $0.model == candidate.modelID }),
-                      ModelReasoningGridCatalog.supports(candidate.effort, option: option)
-                else {
-                    // 手指可继续看到橡皮筋阻力；超出容错边界后清掉预览，松手会取消选择。
+                dragPoint = rubberBanded(value.location, size: size)
+                guard let candidate = candidate(at: value.location, size: size) else {
                     previewSelection = nil
                     lastHapticSelection = nil
                     return
@@ -561,8 +718,7 @@ struct ModelReasoningGridPicker: View {
             .onEnded { value in
                 isDragging = false
                 guard let candidate = candidate(at: value.location, size: size),
-                      let option = layout.rows.first(where: { $0.model == candidate.modelID }),
-                      ModelReasoningGridCatalog.supports(candidate.effort, option: option)
+                      let option = layout.model(matching: candidate.modelID)
                 else {
                     withAnimation(dragSettleAnimation) {
                         dragPoint = nil
@@ -575,7 +731,8 @@ struct ModelReasoningGridPicker: View {
                     previewSelection = candidate
                     dragPoint = center(for: candidate, size: size)
                 }
-                onSelect(option, candidate.effort)
+                guard let effort = candidate.effort else { return }
+                onSelect(option, effort)
                 let completedRevision = gestureRevision
                 DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.13 : 0.32)) {
                     guard completedRevision == gestureRevision, !isDragging else { return }
@@ -602,15 +759,11 @@ struct ModelReasoningGridPicker: View {
             : .spring(response: 0.3, dampingFraction: 1)
     }
 
-    private var visibleAllModels: [CodexAppServerModelOption] {
-        options.filter { !$0.hidden }
-    }
-
     private func candidate(
         at point: CGPoint,
         size: CGSize
     ) -> ModelReasoningGridSelection? {
-        guard !layout.rows.isEmpty,
+        guard !layout.models.isEmpty,
               !layout.efforts.isEmpty,
               size.width > 0,
               size.height > 0
@@ -624,38 +777,66 @@ struct ModelReasoningGridPicker: View {
         else {
             return nil
         }
+
         let x = min(max(point.x, 0), size.width - 0.001)
         let y = min(max(point.y, 0), size.height - 0.001)
-        let columnWidth = size.width / CGFloat(layout.efforts.count)
-        let rowHeight = size.height / CGFloat(layout.rows.count)
-        let column = min(layout.efforts.count - 1, max(0, Int(x / columnWidth)))
-        let row = min(layout.rows.count - 1, max(0, Int(y / rowHeight)))
-        return ModelReasoningGridSelection(
-            modelID: layout.rows[row].model,
-            effort: layout.efforts[column]
+        let column = min(
+            layout.effortColumnCount - 1,
+            max(0, Int(x / (size.width / CGFloat(layout.effortColumnCount))))
         )
+        let row = min(
+            layout.modelRowCount - 1,
+            max(0, Int(y / (size.height / CGFloat(layout.modelRowCount))))
+        )
+        guard let candidate = layout.selection(modelRow: row, effortColumn: column),
+              let effort = candidate.effort
+        else {
+            return nil
+        }
+        let option = layout.models[row]
+        guard ModelReasoningGridCatalog.isStandardEffortAvailable(
+            effort,
+            option: option,
+            layout: layout
+        ) else {
+            return nil
+        }
+        return candidate
     }
 
     private func center(
         for selection: ModelReasoningGridSelection,
         size: CGSize
-    ) -> CGPoint {
-        let row = layout.rows.firstIndex(where: { $0.model == selection.modelID }) ?? 0
-        let column = layout.efforts.firstIndex(of: selection.effort) ?? 0
+    ) -> CGPoint? {
+        guard let effort = selection.effort,
+              let row = layout.models.firstIndex(where: { $0.model == selection.modelID }),
+              let column = layout.efforts.firstIndex(of: effort),
+              ModelReasoningGridCatalog.isStandardEffortAvailable(
+                  effort,
+                  option: layout.models[row],
+                  layout: layout
+              )
+        else {
+            return nil
+        }
         return CGPoint(
-            x: (CGFloat(column) + 0.5) * size.width / CGFloat(max(layout.efforts.count, 1)),
-            y: (CGFloat(row) + 0.5) * size.height / CGFloat(max(layout.rows.count, 1))
+            x: (CGFloat(column) + 0.5) * size.width / CGFloat(layout.effortColumnCount),
+            y: (CGFloat(row) + 0.5) * size.height / CGFloat(layout.modelRowCount)
         )
     }
 
-    private func commit(_ candidate: ModelReasoningGridSelection, option: CodexAppServerModelOption) {
+    private func commit(
+        _ candidate: ModelReasoningGridSelection,
+        option: CodexAppServerModelOption
+    ) {
         gestureRevision += 1
         UISelectionFeedbackGenerator().selectionChanged()
         withAnimation(tapSelectionAnimation) {
             previewSelection = candidate
             dragPoint = nil
         }
-        onSelect(option, candidate.effort)
+        guard let effort = candidate.effort else { return }
+        onSelect(option, effort)
         let completedRevision = gestureRevision
         DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.11 : 0.24)) {
             guard completedRevision == gestureRevision, !isDragging else { return }
@@ -682,7 +863,95 @@ struct ModelReasoningGridPicker: View {
     }
 
     private func rubberDistance(_ distance: CGFloat) -> CGFloat {
-        // 边缘阻力只提供“碰到边界”的物理反馈，不允许离散选择跳出九宫格。
         18 * (1 - 1 / (distance / 70 + 1))
+    }
+}
+
+private struct ModelReasoningAccessiblePicker: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let layout: ModelReasoningGridLayout
+    let selection: ModelReasoningGridSelection
+    let onSelectModel: (CodexAppServerModelOption, CodexAppServerReasoningEffort?) -> Void
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+        VStack(alignment: .leading, spacing: 8) {
+            Menu {
+                ForEach(layout.models) { option in
+                    Button {
+                        onSelectModel(
+                            option,
+                            ModelReasoningGridCatalog.normalizedVisibleEffort(
+                                option: option,
+                                current: selection.effort,
+                                layout: layout
+                            )
+                        )
+                    } label: {
+                        Label(
+                            ModelReasoningGridCatalog.shortTitle(for: option, kind: layout.kind),
+                            systemImage: option.model == activeOption?.model ? "checkmark" : "cpu"
+                        )
+                    }
+                }
+            } label: {
+                HStack {
+                    Text(activeOption.map {
+                        ModelReasoningGridCatalog.shortTitle(for: $0, kind: layout.kind)
+                    } ?? L10n.text("ui.model"))
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                }
+                .font(themeStore.uiFont(.body, weight: .semibold))
+                .foregroundStyle(tokens.primaryText)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .background(tokens.elevatedSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
+
+            ForEach(layout.efforts) { effort in
+                let isAvailable = activeOption.map {
+                    ModelReasoningGridCatalog.isStandardEffortAvailable(effort, option: $0, layout: layout)
+                } ?? false
+                Button {
+                    guard let activeOption else { return }
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    onSelectModel(activeOption, effort)
+                } label: {
+                    HStack {
+                        Text(ModelReasoningGridCatalog.effortTitle(effort))
+                        Spacer()
+                        if isAvailable && selection.effort == effort {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(tokens.accent)
+                        }
+                    }
+                    .font(themeStore.uiFont(.body, weight: .medium))
+                    .foregroundStyle(isAvailable ? tokens.primaryText : tokens.tertiaryText)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .background(tokens.elevatedSurface.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
+                .disabled(!isAvailable)
+                .accessibilityLabel(
+                    "\(activeOption.map { ModelReasoningGridCatalog.shortTitle(for: $0, kind: layout.kind) } ?? ""), "
+                        + ModelReasoningGridCatalog.effortTitle(effort)
+                )
+                .accessibilityValue(
+                    isAvailable
+                        ? (selection.effort == effort ? L10n.text("ui.selected") : L10n.text("ui.not_selected"))
+                        : L10n.text("ui.not_available")
+                )
+            }
+        }
+    }
+
+    private var activeOption: CodexAppServerModelOption? {
+        layout.model(matching: selection.modelID) ?? layout.models.first
     }
 }

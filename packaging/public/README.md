@@ -12,7 +12,7 @@ Mimi Remote Agent 是运行在用户自己 Mac 或 Linux 开发机上的 Go 服�
 
 ```text
 iPhone / iPad App
-  -> Tailscale Endpoint:8787
+  -> Tailscale 或同一局域网 Endpoint:8787
   -> agentd Bearer 鉴权、工作区授权和 JSON-RPC 安全校验
   -> loopback codex app-server WebSocket:4222
   -> 用户本机的 Codex 凭证、线程和项目目录
@@ -24,23 +24,33 @@ iPhone / iPad App
 - 移动端只持有外侧 `agentd` Token，不接触 app-server capability token。
 - 项目、目录和 Worktree 必须位于配置允许的根目录。
 - Gateway 只放行移动端需要的 Codex JSON-RPC 方法，并对请求和响应重新校验。
-- 默认通过 Tailscale 私有网络访问，不建议把 `agentd` 直接暴露到公网。
+- 跨网络默认推荐 Tailscale；未安装时可在同一局域网直连。两种方式都不应把 `agentd` 暴露到公网。
 - 远程命令只执行配置中的 allowlist action，不开放任意 Shell。
 
 ## 实现
 
 ### macOS App（推荐）
 
-从 [GitHub Releases](https://github.com/gaixianggeng/mimi-remote/releases/latest) 下载 `Mimi-Remote-Mac.dmg`，打开后把 **Mimi Remote Mac** 拖到 Applications。安装包同时支持 Apple Silicon 和 Intel，App 内已经包含 `agentd`，不要求用户安装 Go 或 Xcode。
+从 [GitHub Releases](https://github.com/gaixianggeng/mimi-remote/releases/latest) 下载 `Mimi-Remote-Mac.dmg`，打开后把 **Mimi Remote Mac** 拖到 Applications。安装包同时支持 Apple Silicon 和 Intel，App 内已经包含 `agentd` 和兼容的 `alleycat-claude-bridge`，不要求用户安装 Go、Rust 或 Xcode。
 
-首次打开 App 后，在菜单栏完成设置或接管已有 Homebrew 服务；现有配置、Token 和配对关系会保留。安装包使用 Developer ID 签名并经过 Apple Notarization，仍建议下载后核对同一 Release 中的 `Mimi-Remote-Mac.dmg.sha256`。
+首次打开 App 后，在菜单栏完成设置或接管已有 Homebrew 服务；检测到 Tailscale 时优先使用，否则自动启用同一局域网连接。现有配置、Token 和配对关系会保留。安装包使用 Developer ID 签名并经过 Apple Notarization，仍建议下载后核对同一 Release 中的 `Mimi-Remote-Mac.dmg.sha256`。
+
+### Codex Skill
+
+让 `$skill-installer` 安装以下 GitHub 路径，即可由 Codex 按仓库维护的安全流程执行安装、升级、诊断和回滚：
+
+```text
+https://github.com/gaixianggeng/mimi-remote/tree/main/packaging/skill/install-mimi-remote
+```
+
+每个 Release 同时提供 `install-mimi-remote.zip` 与对应 SHA-256 文件，作为可固定版本、可校验的独立发布包。Skill 只包含操作指引，不包含应用二进制、Token 或用户配置。
 
 ### Homebrew 后端
 
 前置条件：
 
 - 已安装并登录 Codex CLI。
-- Mac 和移动设备已加入同一个 Tailscale 网络。
+- Mac 和移动设备位于同一私有网络；跨网络使用时建议加入同一个 Tailscale 网络。
 - 已安装 Homebrew。
 
 ```bash
@@ -53,7 +63,7 @@ agentd up
 agentd status
 ```
 
-`agentd up` 会生成用户私有配置和独立 Token、启动 Homebrew 后台服务、等待 Codex app-server 真正就绪，然后输出短期配对二维码。重复执行会复用现有配置，不会覆盖已经配对的长期 Token。
+`agentd up` 会生成用户私有配置和独立 Token、启动 Homebrew 后台服务、等待 Codex app-server 真正就绪，然后输出短期配对二维码。检测到 Tailscale 时优先使用；否则自动启用 LAN 监听并生成当前局域网地址。重复执行会复用现有配置，不会覆盖已经配对的长期 Token。
 
 Agent 或自动化安装使用 `agentd up --no-pair`；它执行相同初始化与就绪检查，但不输出二维码、Endpoint 和长期访问码。`agentd up --no-pair --json` 只返回版本、就绪状态和安全警告。需要配对时再由用户在本机终端执行 `agentd pair --qr-only`。
 
@@ -112,7 +122,9 @@ macOS 上的 `agentd restart` 使用 launchd 单次原子重启，可以从当�
 
 ### Claude Code 可选通道
 
-Claude 通道需要 `alleycat-claude-bridge >= 0.2.1`。bridge 与完整 Mimi Remote 源码同仓维护：
+Claude 通道默认关闭，需要 `alleycat-claude-bridge >= 0.2.1`。Mimi Remote Mac 已内置经过签名的兼容 bridge，不要为 DMG 安装重复执行 `cargo install`；只需在私有备份后显式设置 `claude.enabled=true`，保留或清空 `bridge_bin` 以使用随包 sibling。
+
+Homebrew、Linux 或独立开发环境才需要从完整源码仓库安装外置 bridge：
 
 ```bash
 cargo install --git https://github.com/gaixianggeng/codex-ipad-agent.git \
@@ -127,6 +139,10 @@ command -v alleycat-claude-bridge
 agentd restart
 agentd doctor
 ```
+
+Mimi Remote Mac 使用随包 bridge 时，从菜单栏选择“重新启动服务”并运行 App 内 Doctor，不使用 Homebrew 的 `agentd restart` 路径。
+
+`agentd` 监督一个 resident bridge，每个 Claude thread 对应一个 headless 进程；移动端重连使用事件 replay 或本机权威历史，不重新提交写操作。Claude 仍不支持 `goal`、`archive`、`fork`、APNs 后台 push 和跨设备云同步。
 
 核心入口：
 
@@ -152,7 +168,7 @@ bash ./scripts/verify-release.sh
 
 ## 风险与优化
 
-- Tailscale 断开时移动端无法访问服务；项目不提供应用层公网中继。
+- Tailscale 断开时不会回退公网；Mac 与移动设备在同一局域网时可重新生成 LAN 配对信息，否则需要恢复 Tailnet。
 - Codex app-server 协议可能变化，升级 Codex CLI 后应先运行协议漂移检查。
 - `danger-full-access` 只适合用户自己的受信开发机；审批策略仍应保持 `on-request`。
 - 多用户、云同步、任意 Shell 和公网 SaaS 不属于当前范围。

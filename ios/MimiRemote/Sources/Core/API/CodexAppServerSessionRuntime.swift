@@ -51,6 +51,12 @@ struct CodexAppServerResolvedServerRequests {
     var userInputSessionIDs: [SessionID] = []
 }
 
+struct CodexAppServerThreadResumeTask {
+    let connection: CodexAppServerConnection
+    let token: UUID
+    let task: Task<Void, Error>
+}
+
 enum CodexAppServerBufferedEventReplayPolicy {
     case all
     case stateOnly
@@ -72,6 +78,9 @@ actor CodexAppServerSessionRuntime {
     // app-server 只向「在当前 gateway 连接上 resume/start 过」的 thread 推送 turn 事件；记录本连接已
     // 经绑定的 thread，断线重连后这个集合随新连接清空，确保再次发送时会先补一次 thread/resume。
     var threadsResumedOnConnection: Set<SessionID> = []
+    // actor 会在 await thread/resume 时重入；同一连接、同一 thread 的并发监听和发送必须等待同一任务，
+    // 否则 gateway 会拒绝重复历史请求，进一步放大上游高负载。
+    var threadResumeTasksBySessionID: [SessionID: CodexAppServerThreadResumeTask] = [:]
     var bufferedEventsBySessionID: [SessionID: [AgentEvent]] = [:]
     var eventMailboxesBySessionID: [
         SessionID: [UUID: CodexAppServerEventMailbox]
@@ -99,10 +108,9 @@ actor CodexAppServerSessionRuntime {
     var stateDBOnlyScanRequiredCWDs: Set<String> = []
     var recencySortUnavailable = false
     var turnStartTasksBySessionID: [SessionID: (token: UUID, task: Task<TurnID?, Error>)] = [:]
-    // thread/list 在 Tailscale Peer Relay/DERP 弱链路上可能要扫本机 Codex 历史并传回较大的 JSON。
-    // 只给列表请求放宽超时，避免影响 turn/start 等交互命令的失败反馈速度。
-    let threadListRequestTimeout: TimeInterval = 60
     let requestTimeout: TimeInterval
+    let longRunningRequestTimeout: TimeInterval
+    let gatewayDefaults: UserDefaults
     var rateLimitRequestTimeout: TimeInterval {
         // Claude 首次读取可能需要通过交互式 `/status` 刷新 Keychain 凭据；
         // 该请求仍在独立 actor/transport 上等待，不阻塞主线程。Codex 保持原 5 秒上限。
@@ -112,6 +120,7 @@ actor CodexAppServerSessionRuntime {
     // turn 误读成 idle/notLoaded；刚收到过实时信号的 thread 在这个时间窗内不接受 history 降级。
     var lastLiveSignalAtBySessionID: [SessionID: Date] = [:]
     let historyDowngradeGraceInterval: TimeInterval = 15
+    var replayCursorEpoch: UInt64 = 0
 
     init(
         endpoint: String,
@@ -119,6 +128,8 @@ actor CodexAppServerSessionRuntime {
         runtimeProvider: String = "codex",
         transportFactory: @escaping () -> CodexAppServerTransport = { URLSessionCodexAppServerTransport() },
         requestTimeout: TimeInterval = 20,
+        longRunningRequestTimeout: TimeInterval = 60,
+        gatewayDefaults: UserDefaults = .standard,
         configProvider: (() async throws -> CodexAppServerConfigResponse)? = nil
     ) {
         let normalizedEndpoint = AgentAPIClient.normalizedEndpoint(endpoint)
@@ -127,6 +138,8 @@ actor CodexAppServerSessionRuntime {
         self.runtimeProvider = Self.normalizedRuntimeProvider(runtimeProvider)
         self.transportFactory = transportFactory
         self.requestTimeout = requestTimeout
+        self.longRunningRequestTimeout = longRunningRequestTimeout
+        self.gatewayDefaults = gatewayDefaults
         self.configProvider = configProvider ?? {
             try await AgentAPIClient(endpoint: normalizedEndpoint, token: token).appServerConfig()
         }
@@ -137,6 +150,7 @@ actor CodexAppServerSessionRuntime {
         notificationPumpTask?.cancel()
         serverRequestPumpTask?.cancel()
         rateLimitRefreshTask?.cancel()
+        threadResumeTasksBySessionID.values.forEach { $0.task.cancel() }
     }
 
     func projects() async throws -> [AgentProject] {
@@ -152,7 +166,7 @@ actor CodexAppServerSessionRuntime {
         }
     }
 
-    func capabilities(path: String?) async throws -> CapabilityListResponse {
+    func capabilities(path: String?, forceReload: Bool = false) async throws -> CapabilityListResponse {
         let legacyClient = AgentAPIClient(endpoint: endpoint, token: token)
         guard let cwd = path?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty else {
             return try await legacyClient.capabilities(path: path)
@@ -163,7 +177,8 @@ actor CodexAppServerSessionRuntime {
         do {
             let builder = CodexAppServerRequestBuilder(allowlistedProjects: try await projects())
             let skillResult = try await sendRecoveringFromStaleInitialization(
-                builder.skillsList(cwd: cwd, forceReload: true)
+                builder.skillsList(cwd: cwd, forceReload: forceReload),
+                timeout: forceReload ? longRunningRequestTimeout : requestTimeout
             )
             let pluginResult = try? await sendRecoveringFromStaleInitialization(
                 builder.installedPluginList(cwd: cwd)
@@ -262,7 +277,7 @@ actor CodexAppServerSessionRuntime {
         let baseProjects = try await projects()
         let projects = projectsIncludingWorkspace(baseProjects, workspace: workspace)
         let workspaceProject = workspace.project
-        let listCWD = threadListCWD(for: workspace, projects: baseProjects)
+        let listCWD = threadListCWD(for: workspace)
         let builder = CodexAppServerRequestBuilder(allowlistedProjects: projects)
         let page = try await threadListPageWithIndexedFallback(
             cwd: listCWD,
@@ -300,7 +315,7 @@ actor CodexAppServerSessionRuntime {
                 limit: limit,
                 cursor: cursor
             ),
-            timeout: threadListRequestTimeout
+            timeout: longRunningRequestTimeout
         )
         let page = try threadSearchPage(from: result, projects: projects)
         for session in page.sessions {
@@ -381,6 +396,11 @@ actor CodexAppServerSessionRuntime {
         try await AgentAPIClient(endpoint: endpoint, token: token).gitStatus(path: path)
     }
 
+    func gitStatusSummary(path: String) async throws -> GitStatusResponse {
+        // 工作区卡片只需要轻量摘要，不能为每张卡片下载完整 diff。
+        try await AgentAPIClient(endpoint: endpoint, token: token).gitStatus(path: path, summaryOnly: true)
+    }
+
     func gitAction(path: String, action: GitActionKind, files: [String]) async throws -> GitStatusResponse {
         // Git 写动作仍由 agentd 控制面执行，方便统一做 allowlist、路径和动作白名单校验。
         try await AgentAPIClient(endpoint: endpoint, token: token).gitAction(path: path, action: action, files: files)
@@ -436,7 +456,8 @@ actor CodexAppServerSessionRuntime {
 
     func session(id: SessionID, afterSeq: EventSequence?) async throws -> SessionResponse {
         let result = try await sendRecoveringFromStaleInitialization(
-            CodexAppServerRequestBuilder(allowlistedProjects: try await projects()).threadRead(threadID: id, includeTurns: false)
+            CodexAppServerRequestBuilder(allowlistedProjects: try await projects()).threadRead(threadID: id, includeTurns: false),
+            timeout: longRunningRequestTimeout
         )
         guard let thread = threadObject(from: result) else {
             throw CodexAppServerSessionRuntimeError.sessionNotFound(id)
@@ -543,7 +564,7 @@ actor CodexAppServerSessionRuntime {
 
         let result: CodexAppServerJSONValue?
         do {
-            result = try await sendRecoveringFromStaleInitialization(spec)
+            result = try await sendRecoveringFromStaleInitialization(spec, timeout: longRunningRequestTimeout)
         } catch {
             guard !payload.resumeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   shouldFallbackFromInitialTurnsPage(error) else {
@@ -557,7 +578,7 @@ actor CodexAppServerSessionRuntime {
                 options: threadOptions,
                 includeInitialTurnsPage: false
             )
-            result = try await sendRecoveringFromStaleInitialization(fallback)
+            result = try await sendRecoveringFromStaleInitialization(fallback, timeout: longRunningRequestTimeout)
         }
         guard let thread = threadObject(from: result) else {
             throw AgentAPIError.invalidResponse
@@ -644,6 +665,7 @@ actor CodexAppServerSessionRuntime {
 
     @discardableResult
     func unsubscribeThread(threadID: SessionID) async throws -> CodexAppServerThreadUnsubscribeStatus? {
+        cancelThreadResumeTask(sessionID: threadID)
         let builder = CodexAppServerRequestBuilder(allowlistedProjects: try await projects())
         let result = try await sendRecoveringFromStaleInitialization(builder.threadUnsubscribe(threadID: threadID))
         threadsResumedOnConnection.remove(threadID)
@@ -685,7 +707,8 @@ actor CodexAppServerSessionRuntime {
                 threadID: threadID,
                 cwd: workspace.path,
                 options: options
-            )
+            ),
+            timeout: longRunningRequestTimeout
         )
         guard let thread = threadObject(from: result) else {
             throw AgentAPIError.invalidResponse
@@ -700,9 +723,6 @@ actor CodexAppServerSessionRuntime {
         return session
     }
 
-    // thread/read 是整段历史的批量拉取，慢链路（Tailscale）下比交互式请求耗时得多；给它一个更宽的
-    // 超时，避免大会话首屏因为 20s 的默认请求超时而直接报错。
-    static let bulkReadTimeout: TimeInterval = 60
     static let threadTurnsCursorPrefix = "turns:"
     static let economyHistoryNotice = L10n.text("ui.this_session_contains_large_images_or_tool_output")
 
@@ -756,7 +776,7 @@ actor CodexAppServerSessionRuntime {
         }
         let result = try await sendRecoveringFromStaleInitialization(
             CodexAppServerRequestBuilder(allowlistedProjects: projects).threadRead(threadID: sessionID, includeTurns: true),
-            timeout: Self.bulkReadTimeout
+            timeout: longRunningRequestTimeout
         )
         guard let thread = threadObject(from: result) else {
             throw CodexAppServerSessionRuntimeError.sessionNotFound(sessionID)
@@ -809,7 +829,7 @@ actor CodexAppServerSessionRuntime {
                 sortDirection: "desc",
                 itemsView: Self.threadTurnItemsView(loadMode: loadMode)
             ),
-            timeout: requestTimeout
+            timeout: longRunningRequestTimeout
         )
         let object = result?.objectValue ?? [:]
         let turns = object["data"]?.arrayValue?.compactMap(\.objectValue) ?? []
@@ -906,7 +926,7 @@ actor CodexAppServerSessionRuntime {
         }
         let result = try await sendRecoveringFromStaleInitialization(
             builder.threadRead(threadID: sessionID, includeTurns: false),
-            timeout: requestTimeout
+            timeout: longRunningRequestTimeout
         )
         guard let thread = threadObject(from: result) else {
             throw CodexAppServerSessionRuntimeError.sessionNotFound(sessionID)
@@ -998,7 +1018,7 @@ actor CodexAppServerSessionRuntime {
                     useStateDBOnly: canUseIndexedList,
                     sortKey: sortKey
                 ),
-                timeout: threadListRequestTimeout
+                timeout: longRunningRequestTimeout
             )
             let page = threadListPage(from: result, projects: projects, fallbackProject: fallbackProject)
             guard canUseIndexedList, indexedThreadListNeedsRepair(page, cwd: cwd) else {
@@ -1059,7 +1079,7 @@ actor CodexAppServerSessionRuntime {
                 useStateDBOnly: false,
                 sortKey: preferredThreadListSortKey
             ),
-            timeout: threadListRequestTimeout
+            timeout: longRunningRequestTimeout
         )
         return threadListPage(from: result, projects: projects, fallbackProject: fallbackProject)
     }
@@ -1468,7 +1488,7 @@ actor CodexAppServerSessionRuntime {
                     cwd: context.cwd,
                     payload: payload,
                     clientMessageID: clientMessageID
-                ))
+                ), timeout: longRunningRequestTimeout)
                 break
             } catch {
                 if !didRetryAfterStaleInitialization,
@@ -1519,7 +1539,7 @@ actor CodexAppServerSessionRuntime {
                     payload: payload,
                     clientMessageID: clientMessageID,
                     expectedTurnID: expectedTurnID
-                ))
+                ), timeout: longRunningRequestTimeout)
                 return
             } catch {
                 if !didRetryAfterStaleInitialization,
@@ -1563,9 +1583,54 @@ actor CodexAppServerSessionRuntime {
         guard !threadsResumedOnConnection.contains(sessionID) else {
             return
         }
+        if let existing = threadResumeTasksBySessionID[sessionID] {
+            if existing.connection === connection {
+                return try await existing.task.value
+            }
+            // 理论上连接替换路径会统一清理；这里再做代次防线，避免旧任务迟到后把新连接误标为已 resume。
+            existing.task.cancel()
+            threadResumeTasksBySessionID.removeValue(forKey: sessionID)
+        }
+
+        let token = UUID()
+        let task = Task { [self] in
+            try await performThreadResume(
+                sessionID: sessionID,
+                cwd: cwd,
+                builder: builder,
+                connection: connection
+            )
+        }
+        threadResumeTasksBySessionID[sessionID] = CodexAppServerThreadResumeTask(
+            connection: connection,
+            token: token,
+            task: task
+        )
+        do {
+            try await task.value
+            clearThreadResumeTask(sessionID: sessionID, connection: connection, token: token)
+        } catch {
+            clearThreadResumeTask(sessionID: sessionID, connection: connection, token: token)
+            throw error
+        }
+    }
+
+    func performThreadResume(
+        sessionID: SessionID,
+        cwd: String,
+        builder: CodexAppServerRequestBuilder,
+        connection: CodexAppServerConnection
+    ) async throws {
         let result: CodexAppServerJSONValue?
         do {
-            result = try await connection.send(try builder.threadResume(threadID: sessionID, cwd: cwd, options: runtimeScopedThreadOptions(.default)))
+            result = try await connection.send(
+                try builder.threadResume(
+                    threadID: sessionID,
+                    cwd: cwd,
+                    options: runtimeScopedThreadOptions(.default)
+                ),
+                timeout: longRunningRequestTimeout
+            )
         } catch {
             if shouldFallbackFromInitialTurnsPage(error) {
                 result = try await connection.send(try builder.threadResume(
@@ -1573,12 +1638,13 @@ actor CodexAppServerSessionRuntime {
                     cwd: cwd,
                     options: runtimeScopedThreadOptions(.default),
                     includeInitialTurnsPage: false
-                ))
+                ), timeout: longRunningRequestTimeout)
             } else if isNoRolloutFoundError(error) {
                 // 刚 thread/start、还没跑过任何 turn 的新线程在上游没有 rollout 文件，thread/resume 会返回
                 // -32600 "no rollout found"。这类线程已经在本连接上被 thread/start 绑定，resume 只是冗余；
                 // 标记为已 resume 并放行，等首个 turn/start 落盘 rollout 后事件自然回流。否则空会话开屏即
                 // 因 connectForEvents 抛错进入“WebSocket 断开，正在自动重连”的死循环。
+                try Task.checkCancellation()
                 threadsResumedOnConnection.insert(sessionID)
                 return
             } else {
@@ -1603,7 +1669,37 @@ actor CodexAppServerSessionRuntime {
                 ))
             }
         }
+        try Task.checkCancellation()
         threadsResumedOnConnection.insert(sessionID)
+    }
+
+    func clearThreadResumeTask(
+        sessionID: SessionID,
+        connection: CodexAppServerConnection,
+        token: UUID
+    ) {
+        guard let current = threadResumeTasksBySessionID[sessionID],
+              current.connection === connection,
+              current.token == token else {
+            return
+        }
+        threadResumeTasksBySessionID.removeValue(forKey: sessionID)
+    }
+
+    func cancelThreadResumeTask(sessionID: SessionID) {
+        guard let current = threadResumeTasksBySessionID.removeValue(forKey: sessionID) else {
+            return
+        }
+        current.task.cancel()
+    }
+
+    func cancelThreadResumeTasks(for connection: CodexAppServerConnection) {
+        let sessionIDs = threadResumeTasksBySessionID.compactMap { entry in
+            entry.value.connection === connection ? entry.key : nil
+        }
+        for sessionID in sessionIDs {
+            cancelThreadResumeTask(sessionID: sessionID)
+        }
     }
 
     func storeAuthoritativeTurnsSnapshot(
@@ -1709,7 +1805,38 @@ actor CodexAppServerSessionRuntime {
         try await ensureConnection().respond(to: request, result: userInputResponse(for: request, answers: answers))
     }
 
-    static func gatewayURL(endpoint: String, sessionID: SessionID, runtimeProvider: String = "codex") throws -> URL {
+    /// Stable per-install name for this client's resumable gateway session.
+    ///
+    /// One gateway connection carries every thread of a runtime — the URL's
+    /// `thread_id` is empty on the real connection — so the resident bridge
+    /// session it maps to is keyed to the app install, not to a thread. It
+    /// has to survive app restarts, because that is the case the resident
+    /// bridge exists for: close the app mid-task, come back an hour later,
+    /// and reattach to the session that kept running.
+    /// Minting is serialized: two connections coming up together must not each
+    /// generate a key and race to persist it, or one of them would connect
+    /// under a name that is not the one stored — and silently fail to find its
+    /// session on the next launch.
+    private static let gatewaySessionKeyLock = NSLock()
+
+    static func gatewaySessionKey(defaults: UserDefaults = .standard) -> String {
+        let storageKey = "appServer.gatewaySessionKey"
+        gatewaySessionKeyLock.lock()
+        defer { gatewaySessionKeyLock.unlock() }
+        if let stored = defaults.string(forKey: storageKey), !stored.isEmpty {
+            return stored
+        }
+        let minted = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        defaults.set(minted, forKey: storageKey)
+        return minted
+    }
+
+    static func gatewayURL(
+        endpoint: String,
+        sessionID: SessionID,
+        runtimeProvider: String = "codex",
+        defaults: UserDefaults = .standard
+    ) throws -> URL {
         // WebSocket 也必须复用 HTTP Endpoint 策略；ATS 不会替应用阻止自行构造的公网 ws:// 地址。
         let validatedEndpoint = try EndpointTransportPolicy.validatedEndpoint(endpoint)
         guard var components = URLComponents(string: validatedEndpoint) else {
@@ -1729,6 +1856,20 @@ actor CodexAppServerSessionRuntime {
         if runtime != "codex" {
             queryItems.append(URLQueryItem(name: "runtime", value: runtime))
         }
+        // 命名这条连接对应的常驻会话。不带它，网关只能按连接给一个隔离会话，
+        // 断线重连拿不回还在跑的 turn 和未应答的审批。
+        let gatewaySession = "\(gatewaySessionKey(defaults: defaults))-\(runtime)"
+        queryItems.append(URLQueryItem(name: "session", value: gatewaySession))
+        // Go 写 WebSocket 成功不等于 App 已经投影完该帧。由客户端带回最后
+        // 处理完成的 turn 边界，bridge 才能从真正安全的 cursor 继续回放。
+        if runtime == "claude", let lastSeen = gatewayLastSeenSequence(
+            endpoint: validatedEndpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: runtime,
+            defaults: defaults
+        ) {
+            queryItems.append(URLQueryItem(name: "last_seen", value: String(lastSeen)))
+        }
         components.queryItems = queryItems
         guard let url = components.url else {
             throw AgentAPIError.invalidEndpoint
@@ -1746,6 +1887,67 @@ actor CodexAppServerSessionRuntime {
         default:
             return value
         }
+    }
+
+    private static func gatewayLastSeenStorageKey(
+        endpoint: String,
+        gatewaySession: String,
+        runtimeProvider: String
+    ) -> String {
+        // endpoint 可能含 UserDefaults key 不友好的字符；base64 只作为稳定命名，不承载密钥。
+        let endpointKey = Data(AgentAPIClient.normalizedEndpoint(endpoint).utf8).base64EncodedString()
+        return "appServer.gatewayLastSeen.v2.\(normalizedRuntimeProvider(runtimeProvider)).\(gatewaySession).\(endpointKey)"
+    }
+
+    static func gatewayLastSeenSequence(
+        endpoint: String,
+        gatewaySession: String,
+        runtimeProvider: String,
+        defaults: UserDefaults = .standard
+    ) -> UInt64? {
+        let key = gatewayLastSeenStorageKey(
+            endpoint: endpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: runtimeProvider
+        )
+        guard let raw = defaults.string(forKey: key) else {
+            return nil
+        }
+        return UInt64(raw)
+    }
+
+    static func storeGatewayLastSeenSequence(
+        _ sequence: UInt64,
+        endpoint: String,
+        gatewaySession: String,
+        runtimeProvider: String,
+        defaults: UserDefaults = .standard
+    ) {
+        let key = gatewayLastSeenStorageKey(
+            endpoint: endpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: runtimeProvider
+        )
+        let current = defaults.string(forKey: key).flatMap(UInt64.init) ?? 0
+        guard sequence > current else { return }
+        defaults.set(String(sequence), forKey: key)
+    }
+
+    static func resetGatewayLastSeenSequence(
+        _ sequence: UInt64,
+        endpoint: String,
+        gatewaySession: String,
+        runtimeProvider: String,
+        defaults: UserDefaults = .standard
+    ) {
+        let key = gatewayLastSeenStorageKey(
+            endpoint: endpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: runtimeProvider
+        )
+        // bridge 进程重启后 sequence 会从头计数，必须允许显式倒退；普通确认仍走
+        // storeGatewayLastSeenSequence 的单调写入，避免迟到任务误覆盖新 cursor。
+        defaults.set(String(sequence), forKey: key)
     }
 
     func detachEvents(sessionID: SessionID, token: UUID) {
@@ -1835,6 +2037,8 @@ actor CodexAppServerSessionRuntime {
     func installConnection(_ prepared: CodexAppServerPreparedConnection) {
         notificationPumpTask?.cancel()
         serverRequestPumpTask?.cancel()
+        threadResumeTasksBySessionID.values.forEach { $0.task.cancel() }
+        threadResumeTasksBySessionID.removeAll(keepingCapacity: true)
         // 新连接还没在 app-server 上 resume 任何 thread，清空记录，逼迫下一次发送先补 resume。
         threadsResumedOnConnection.removeAll(keepingCapacity: true)
         connection = prepared.connection
@@ -1864,6 +2068,7 @@ actor CodexAppServerSessionRuntime {
         notificationPumpTask = nil
         serverRequestPumpTask?.cancel()
         serverRequestPumpTask = nil
+        cancelThreadResumeTasks(for: endedConnection)
         connection = nil
         threadsResumedOnConnection.removeAll(keepingCapacity: true)
         let affected = clearAllPendingServerRequests()
@@ -1933,6 +2138,7 @@ actor CodexAppServerSessionRuntime {
         notificationPumpTask = nil
         serverRequestPumpTask?.cancel()
         serverRequestPumpTask = nil
+        cancelThreadResumeTasks(for: stale)
         connection = nil
         threadsResumedOnConnection.removeAll(keepingCapacity: true)
         let affected = clearAllPendingServerRequests()
@@ -1954,7 +2160,8 @@ actor CodexAppServerSessionRuntime {
               current === stale else {
             return
         }
-        // turn/start 失败后不要继续复用半断连接；重连会重新 thread/resume 并补拉历史。
+        // 只有连接级错误才淘汰共享连接；单个 RPC 超时可能只是 app-server 高负载，
+        // 此时保留通知流和其他 pending 请求，避免一个慢请求拖断所有会话。
         await retireConnection(stale)
     }
 
@@ -1963,11 +2170,11 @@ actor CodexAppServerSessionRuntime {
             return false
         }
         switch error {
-        case .disconnected, .notInitialized, .timeout, .transport:
+        case .disconnected, .notInitialized, .transport:
             return true
         case .appServer(let appServerError):
             return isStaleInitializationAppServerError(appServerError)
-        case .duplicateRequestID, .decoding:
+        case .timeout, .duplicateRequestID, .decoding:
             return false
         }
     }
@@ -2016,7 +2223,12 @@ actor CodexAppServerSessionRuntime {
         }
         // config 只用于确认 gateway 能力；真实 URL 始终从当前连接代次的 endpoint 派生。
         // 这样 REST 与 WebSocket 不会因为反向代理返回了另一 Host 而分裂到不同链路。
-        return try Self.gatewayURL(endpoint: endpoint, sessionID: "", runtimeProvider: runtimeProvider)
+        return try Self.gatewayURL(
+            endpoint: endpoint,
+            sessionID: "",
+            runtimeProvider: runtimeProvider,
+            defaults: gatewayDefaults
+        )
     }
 
     func runtimeGatewayAvailable(in config: CodexAppServerConfigResponse) -> Bool {
@@ -2034,6 +2246,21 @@ actor CodexAppServerSessionRuntime {
     }
 
     func handle(_ notification: CodexAppServerNotification) {
+        if notification.method == "_mimi/claudeReplayCursor/reset",
+           runtimeProvider == "claude",
+           let rawSequence = notification.params?.objectValue?["sequence"]?.intValue,
+           rawSequence >= 0 {
+            replayCursorEpoch &+= 1
+            let gatewaySession = "\(Self.gatewaySessionKey(defaults: gatewayDefaults))-\(runtimeProvider)"
+            Self.resetGatewayLastSeenSequence(
+                UInt64(rawSequence),
+                endpoint: endpoint,
+                gatewaySession: gatewaySession,
+                runtimeProvider: runtimeProvider,
+                defaults: gatewayDefaults
+            )
+            return
+        }
         recordLiveSignal(from: notification)
         updateContext(from: notification)
         let resolved = clearResolvedServerRequest(from: notification)
@@ -2047,6 +2274,10 @@ actor CodexAppServerSessionRuntime {
             for sessionID in resolved.userInputSessionIDs {
                 emitUserInputResolved(sessionID: sessionID, skipped: false)
             }
+            return
+        }
+        if notification.method == "serverRequest/replay" {
+            redeliverReplayedServerRequests(notification)
             return
         }
         if notification.method == "deprecationNotice",
@@ -2066,7 +2297,7 @@ actor CodexAppServerSessionRuntime {
             }
             return
         }
-        guard let event = projector.project(notification) else {
+        guard var event = projector.project(notification) else {
             for sessionID in resolved.approvalSessionIDs {
                 emitApprovalResolved(sessionID: sessionID)
             }
@@ -2074,6 +2305,12 @@ actor CodexAppServerSessionRuntime {
                 emitUserInputResolved(sessionID: sessionID, skipped: false)
             }
             return
+        }
+        if notification.method == "turn/completed" || notification.method == "thread/closed" {
+            event = event.withReplayBoundarySequence(
+                notification.replaySequence,
+                epoch: replayCursorEpoch
+            )
         }
         emit(event)
         let emittedSessionID = sessionID(from: event)
@@ -2083,6 +2320,23 @@ actor CodexAppServerSessionRuntime {
         for sessionID in resolved.userInputSessionIDs where sessionID != emittedSessionID {
             emitUserInputResolved(sessionID: sessionID, skipped: false)
         }
+    }
+
+    /// 由 MainActor 在 Conversation/Session 投影全部落地后调用。单调提交避免并行订阅
+    /// 的迟到完成事件把 cursor 倒退；scope 隔离不同 Mac、安装会话与 runtime。
+    func acknowledgeAppliedReplayBoundary(_ sequence: UInt64, epoch: UInt64?) {
+        guard runtimeProvider == "claude",
+              epoch == replayCursorEpoch else {
+            return
+        }
+        let gatewaySession = "\(Self.gatewaySessionKey(defaults: gatewayDefaults))-\(runtimeProvider)"
+        Self.storeGatewayLastSeenSequence(
+            sequence,
+            endpoint: endpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: runtimeProvider,
+            defaults: gatewayDefaults
+        )
     }
 
     func handle(_ request: CodexAppServerServerRequest) {
@@ -2103,6 +2357,53 @@ actor CodexAppServerSessionRuntime {
             return
         }
         emit(event)
+    }
+
+    /// Re-deliver the server requests a reconnect found still waiting.
+    ///
+    /// A bridge whose sessions outlive the connection keeps an approval
+    /// prompt pending across a disconnect — that is the whole point of it —
+    /// and lists the survivors in one notification as soon as we attach.
+    /// Each entry goes back through the live path, so a restored prompt is
+    /// bookkept and rendered exactly like the original was.
+    ///
+    /// `isStaleReplayedApproval` is deliberately not consulted here. That
+    /// check exists for app-servers that re-deliver zombie approvals from
+    /// turns they have long since moved past; this list is the bridge's own
+    /// not-yet-answered table, emptied the moment a request resolves or its
+    /// turn dies, so everything in it is live by construction. Running the
+    /// check would decline the very prompts the user came back to answer,
+    /// because a thread parked on an approval still reports itself as idle.
+    func redeliverReplayedServerRequests(_ notification: CodexAppServerNotification) {
+        for entry in notification.params?["outstanding"]?.arrayValue ?? [] {
+            guard let method = entry["method"]?.stringValue,
+                  let id = replayedServerRequestID(entry["id"]) else {
+                continue
+            }
+            let request = CodexAppServerServerRequest(id: id, method: method, params: entry["params"])
+            if isUserInputServerRequest(request) {
+                handleUserInputRequest(request)
+                continue
+            }
+            rememberPendingApprovalRequest(request)
+            guard let event = projector.project(request) else {
+                continue
+            }
+            emit(event)
+        }
+    }
+
+    /// The id travels back to the bridge verbatim when the user answers, so
+    /// keep its JSON type instead of coercing everything to a string.
+    func replayedServerRequestID(_ value: CodexAppServerJSONValue?) -> CodexAppServerRequestID? {
+        switch value {
+        case .string(let text):
+            return .string(text)
+        case .int(let number):
+            return .int(number)
+        default:
+            return nil
+        }
     }
 
     func handleUserInputRequest(_ request: CodexAppServerServerRequest) {

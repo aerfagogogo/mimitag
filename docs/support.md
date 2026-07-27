@@ -11,9 +11,11 @@
 使用前请确认：
 
 - iPhone 或 iPad 运行 App 支持的系统版本。
-- Mac 已安装并登录 Codex CLI。
-- Mac 已通过 Homebrew 安装并启动 `mimi-remote` 后端。
+- Mac 运行 macOS 26 或更高版本，并已安装和登录 Codex CLI。
+- Mac 已从 [GitHub Releases](https://github.com/gaixianggeng/mimi-remote/releases/latest) 安装并启动 **Mimi Remote Mac**。
 - 移动设备能够通过局域网、Tailscale 私有网络或用户配置的 HTTPS 地址访问 Mac。
+
+普通用户请下载 `Mimi-Remote-Mac.dmg`，打开后将 **Mimi Remote Mac** 拖入“应用程序”，再在 Mac App 内完成首次设置。命令行安装只作为服务器、自动化或故障恢复入口：
 
 ```bash
 brew update
@@ -22,7 +24,7 @@ agentd up
 agentd status
 ```
 
-运行 `agentd pair` 获取新的短期配对二维码，然后在 App 的“Mac 连接”页面扫码。也可以手动输入地址和访问 Token。
+Mac App 首次设置会显示短期配对二维码，然后在移动端 App 的“Mac 连接”页面扫码。命令行用户可运行 `agentd pair` 重新生成二维码；也可以手动输入地址和访问 Token。
 
 ### 实现
 
@@ -52,9 +54,11 @@ This page provides installation, connection, diagnostics, data-deletion, and con
 Before using the app, confirm that:
 
 - Your iPhone or iPad runs a supported system version.
-- Codex CLI is installed and signed in on your Mac.
-- The `mimi-remote` backend is installed with Homebrew and running on the Mac.
+- Your Mac runs macOS 26 or later, with Codex CLI installed and signed in.
+- **Mimi Remote Mac** is installed from [GitHub Releases](https://github.com/gaixianggeng/mimi-remote/releases/latest) and running.
 - The mobile device can reach the Mac over a local network, a private Tailscale network, or an HTTPS endpoint you configure.
+
+For normal setup, download `Mimi-Remote-Mac.dmg`, open it, drag **Mimi Remote Mac** to Applications, and finish setup in the Mac app. Use the command-line path only for servers, automation, or recovery:
 
 ```bash
 brew update
@@ -63,7 +67,7 @@ agentd up
 agentd status
 ```
 
-Run `agentd pair` to create a new short-lived pairing QR code, then scan it from the Mac Connection screen. Manual endpoint and token entry are also available.
+The Mac app shows a short-lived pairing QR code during first-run setup; scan it from the Mac Connection screen on iPhone or iPad. Command-line users can run `agentd pair` to generate a new code. Manual endpoint and token entry are also available.
 
 ### Troubleshooting
 

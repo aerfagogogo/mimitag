@@ -1163,7 +1163,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .confirmed
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [user, command, diff, assistant])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [user, command, diff, assistant]))
 
         XCTAssertEqual(items.count, 4)
         if case .message(let first) = items[0] {
@@ -1207,7 +1207,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .confirmed
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [command, assistant])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [command, assistant]))
 
         XCTAssertEqual(items.count, 2)
         if case .activityBatch(let activity) = items[0] {
@@ -1249,7 +1249,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .confirmed
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [user, assistant, diff])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [user, assistant, diff]))
 
         XCTAssertEqual(items.count, 3)
         if case .message(let first) = items[0] {
@@ -1288,7 +1288,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .sending
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [command, assistant])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [command, assistant]))
 
         XCTAssertEqual(items.count, 2)
         guard case .activityBatch(let visibleCommands) = items[0] else {
@@ -1361,7 +1361,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .confirmed
         )
 
-        let activeItems = ConversationTimelineItemBuilder.items(from: [read, search, build])
+        let activeItems = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [read, search, build]))
         XCTAssertEqual(activeItems.count, 1)
         let activeGroup: ConversationActivityBatch
         if case .activityBatch(let group) = activeItems[0] {
@@ -1373,7 +1373,7 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(activeGroup.kind, .execution, "混合探索和真实执行时使用更稳妥的执行语义")
         XCTAssertEqual(activeGroup.status, .running)
 
-        let completedItems = ConversationTimelineItemBuilder.items(from: [read, search, build, assistant])
+        let completedItems = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [read, search, build, assistant]))
         guard case .activityBatch(let completedGroup) = completedItems[0] else {
             return XCTFail("完成后仍应保留活动进度行")
         }
@@ -1412,7 +1412,7 @@ final class ConversationDataFlowTests: XCTestCase {
         )
         let messages = Array((0..<12).map(command)) + [commentary] + Array((12..<20).map(command))
 
-        let items = ConversationTimelineItemBuilder.items(from: messages)
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: messages))
 
         XCTAssertEqual(items.count, 3, "20 条命令只应形成 commentary 前后的两个稳定活动批次")
         guard case .activityBatch(let firstBatch) = items[0],
@@ -1456,7 +1456,7 @@ final class ConversationDataFlowTests: XCTestCase {
             turnLifecycle: .inProgress
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [command, commentary])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [command, commentary]))
 
         XCTAssertEqual(items.count, 2)
         guard case .activityBatch(let batch) = items[0], case .message = items[1] else {
@@ -1502,7 +1502,7 @@ final class ConversationDataFlowTests: XCTestCase {
             turnLifecycle: .inProgress
         )
 
-        let runningItems = ConversationTimelineItemBuilder.items(from: [first, second])
+        let runningItems = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [first, second]))
         guard case .activityBatch(let runningBatch) = runningItems.first else {
             return XCTFail("恢复过程应显示为活动批次")
         }
@@ -1514,7 +1514,7 @@ final class ConversationDataFlowTests: XCTestCase {
             next.turnLifecycle = .completed
             return next
         }
-        guard case .activityBatch(let completedBatch) = ConversationTimelineItemBuilder.items(from: completedMessages).first else {
+        guard case .activityBatch(let completedBatch) = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: completedMessages)).first else {
             return XCTFail("恢复成功后仍应保留活动批次")
         }
         XCTAssertEqual(completedBatch.id, runningBatch.id)
@@ -1526,7 +1526,7 @@ final class ConversationDataFlowTests: XCTestCase {
             next.turnLifecycle = .failed
             return next
         }
-        guard case .activityBatch(let failedBatch) = ConversationTimelineItemBuilder.items(from: failedMessages).first else {
+        guard case .activityBatch(let failedBatch) = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: failedMessages)).first else {
             return XCTFail("turn 失败后仍应保留活动批次")
         }
         XCTAssertEqual(failedBatch.status, .failed)
@@ -1536,7 +1536,7 @@ final class ConversationDataFlowTests: XCTestCase {
             next.turnLifecycle = .interrupted
             return next
         }
-        guard case .activityBatch(let interruptedBatch) = ConversationTimelineItemBuilder.items(from: interruptedMessages).first else {
+        guard case .activityBatch(let interruptedBatch) = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: interruptedMessages)).first else {
             return XCTFail("turn 中断后仍应保留活动批次")
         }
         XCTAssertEqual(interruptedBatch.status, .interrupted)
@@ -1642,7 +1642,7 @@ final class ConversationDataFlowTests: XCTestCase {
             )
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [first, second])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [first, second]))
 
         XCTAssertEqual(items.count, 2)
         guard case .activityBatch(let firstGroup) = items[0],
@@ -1676,7 +1676,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .confirmed
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [pending, submitted])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [pending, submitted]))
 
         XCTAssertEqual(items.count, 2)
         guard case .message(let visiblePending) = items[0] else {
@@ -1718,7 +1718,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .sending
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [command, approval, assistant])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [command, approval, assistant]))
 
         // 命令、审批和 streaming assistant 都直接可见；审批仍然保留交互卡片。
         XCTAssertEqual(items.count, 3)
@@ -1756,7 +1756,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .failed
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [command, assistant])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [command, assistant]))
 
         XCTAssertEqual(items.count, 2)
         guard case .activityBatch(let failedCommands) = items[0] else {
@@ -1788,7 +1788,7 @@ final class ConversationDataFlowTests: XCTestCase {
             sendStatus: .confirmed
         )
 
-        let items = ConversationTimelineItemBuilder.items(from: [error, assistant])
+        let items = flattenWorkGroups(ConversationTimelineItemBuilder.items(from: [error, assistant]))
 
         XCTAssertEqual(items.count, 2)
         if case .message(let first) = items[0] {
@@ -2475,6 +2475,30 @@ final class ConversationDataFlowTests: XCTestCase {
 
         sessionStore.removeComposerDraft(for: scope)
         XCTAssertEqual(sessionStore.composerDraft(for: scope), .empty)
+    }
+
+    /// 这些旧回归专注验证第一遍 activity/process 聚合；外层 work-group 语义由
+    /// ConversationProcessGrouperTests 单独覆盖。展开 entry 后可继续锁住原有细节。
+    private func flattenWorkGroups(
+        _ items: [ConversationTimelineItem]
+    ) -> [ConversationTimelineItem] {
+        items.flatMap { item in
+            guard case .workGroup(let group) = item else {
+                return [item]
+            }
+            return group.entries.map { entry in
+                switch entry {
+                case .commentary(let message):
+                    return .message(message)
+                case .activity(let message):
+                    return .activity(message)
+                case .activityBatch(let batch):
+                    return .activityBatch(batch)
+                case .processGroup(let process):
+                    return .processGroup(process)
+                }
+            }
+        }
     }
 
 }

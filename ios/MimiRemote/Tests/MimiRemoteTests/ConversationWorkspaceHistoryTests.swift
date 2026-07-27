@@ -7,6 +7,49 @@ import UIKit
 
 @MainActor
 extension ConversationDataFlowTests {
+    func testWorkspaceSessionAgeBoundaryStartsAtFirstSessionOlderThanTwelveHours() {
+        let project = makeProject(id: "proj_workspace_age_boundary")
+        let now = Date(timeIntervalSince1970: 200_000)
+        let recent = makeSession(
+            id: "session_recent",
+            projectID: project.id,
+            title: "最近活动",
+            status: "history",
+            source: "codex",
+            recencyAt: now.addingTimeInterval(-(11 * 60 * 60))
+        )
+        let exactlyTwelveHours = makeSession(
+            id: "session_boundary",
+            projectID: project.id,
+            title: "刚好十二小时",
+            status: "history",
+            source: "codex",
+            recencyAt: now.addingTimeInterval(-WorkspaceSessionAgeBoundary.staleInterval)
+        )
+        let stale = makeSession(
+            id: "session_stale",
+            projectID: project.id,
+            title: "超过十二小时",
+            status: "history",
+            source: "codex",
+            recencyAt: now.addingTimeInterval(-WorkspaceSessionAgeBoundary.staleInterval - 1)
+        )
+        let ordered = SessionIndexStore.sortedSessions([stale, recent, exactlyTwelveHours])
+
+        XCTAssertEqual(
+            WorkspaceSessionAgeBoundary.firstStaleIndex(in: ordered, now: now),
+            2,
+            "刚好十二小时仍属于近期；只在首个严格超过十二小时的会话前插入一次边界"
+        )
+        XCTAssertNil(
+            WorkspaceSessionAgeBoundary.firstStaleIndex(in: [recent, exactlyTwelveHours], now: now)
+        )
+        XCTAssertEqual(
+            WorkspaceSessionAgeBoundary.firstStaleIndex(in: [stale], now: now),
+            0
+        )
+    }
+
     func testRecentSessionSortUsesUserRecencyInsteadOfAgentUpdatedAt() {
         let project = makeProject(id: "proj_recency_sort")
         let first = makeSession(
@@ -1332,6 +1375,29 @@ extension ConversationDataFlowTests {
         )
     }
 
+    func testWorkspaceManualRefreshUsesAuthoritativeSessionList() async throws {
+        let project = makeProject(id: "proj_workspace_authoritative_refresh")
+        let client = MutableSessionPageClient(
+            projects: [project],
+            page: SessionsPage(sessions: [])
+        )
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+        store.projects = [project]
+
+        try await store.refreshWorkspaceSessions(projectID: project.id)
+
+        XCTAssertEqual(
+            client.requestedSessionListConsistencies,
+            [.authoritative],
+            "用户主动刷新工作区时必须绕过可能滞后的 State DB 快速索引"
+        )
+    }
+
     func testSessionListSnapshotUpdatesWhenPaginationStateChangesWithoutSessionDiff() async {
         let project = makeProject(id: "proj_1")
         let firstPage = (0..<3).map { index in
@@ -1510,6 +1576,21 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(WorkspaceSessionRuntimeChoice.claude.brandAssetName, "Claude")
     }
 
+    func testSessionRuntimePresentationNormalizesKnownRuntimeAliases() {
+        XCTAssertEqual(
+            SessionRuntimePresentation(runtimeProvider: nil, source: "openai").kind,
+            .codex
+        )
+        XCTAssertEqual(
+            SessionRuntimePresentation(runtimeProvider: "anthropic", source: "codex").kind,
+            .claude
+        )
+        XCTAssertEqual(
+            SessionRuntimePresentation(runtimeProvider: "claude-code", source: "local").brandAssetName,
+            "Claude"
+        )
+    }
+
     func testWorkspaceStripUsesViewportWidthToCenterSmallCardGroups() {
         XCTAssertEqual(WorkspaceStripLayout.minimumContentWidth(viewportWidth: 1_400), 1_352)
         XCTAssertEqual(WorkspaceStripLayout.minimumContentWidth(viewportWidth: 40), 0)
@@ -1580,7 +1661,7 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(store.sessions(forProjectID: project.id).map(\.id), ["codex_gamma", "codex_beta", "codex_alpha"])
     }
 
-    func testSessionStoreFreezesProjectOrderWhileSessionIsRunning() async {
+    func testSessionStoreKeepsProjectOrderByLatestActivityWhileSessionIsRunning() async {
         let project = makeProject(id: "proj_1")
         let history = makeSession(
             id: "codex_history",
@@ -1624,8 +1705,8 @@ extension ConversationDataFlowTests {
         ])
         await store.refreshSelectedProjectSessions()
 
-        // running 输出刷新会更新 updatedAt；侧栏保持用户正在看的相对顺序，避免列表来回跳。
-        XCTAssertEqual(store.sessions(forProjectID: project.id).map(\.id), [history.id, running.id])
+        // 运行态不能冻结整个工作区；活动时间变化后仍须维持“最近会话”的降序语义。
+        XCTAssertEqual(store.sessions(forProjectID: project.id).map(\.id), [running.id, history.id])
 
         client.page = SessionsPage(sessions: [
             history,
@@ -1640,8 +1721,66 @@ extension ConversationDataFlowTests {
         ])
         await store.refreshSelectedProjectSessions()
 
-        // 没有 running session 后释放冻结顺序，恢复 updatedAt 排序。
+        // 进入终态后继续使用同一个排序键，不发生第二套排序规则切换。
         XCTAssertEqual(store.sessions(forProjectID: project.id).map(\.id), [running.id, history.id])
+    }
+
+    func testSessionStoreGloballySortsMixedRuntimesWhileSessionIsRunning() {
+        let project = makeProject(id: "proj_mixed_runtime_order")
+        let codexRunning = makeSession(
+            id: "codex_running",
+            projectID: project.id,
+            title: "Codex 运行中",
+            status: "running",
+            source: "codex",
+            runtimeProvider: "codex",
+            recencyAt: Date(timeIntervalSince1970: 30)
+        )
+        let claudeOld = makeSession(
+            id: "claude_old",
+            projectID: project.id,
+            title: "Claude 较早会话",
+            status: "history",
+            source: "claude",
+            runtimeProvider: "claude",
+            recencyAt: Date(timeIntervalSince1970: 10)
+        )
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { MockSessionStoreClient(projects: [project], sessions: []) }
+        )
+
+        // 先写入一批会话，模拟其中一个 runtime 的首批索引已经显示。
+        store.sessions = [claudeOld, codexRunning]
+
+        let claudeNewest = makeSession(
+            id: "claude_newest",
+            projectID: project.id,
+            title: "Claude 最新会话",
+            status: "history",
+            source: "claude",
+            runtimeProvider: "claude",
+            recencyAt: Date(timeIntervalSince1970: 40)
+        )
+        let codexMiddle = makeSession(
+            id: "codex_middle",
+            projectID: project.id,
+            title: "Codex 中间会话",
+            status: "history",
+            source: "codex",
+            runtimeProvider: "codex",
+            recencyAt: Date(timeIntervalSince1970: 20)
+        )
+
+        // 后到的 Codex/Claude 项不能按 provider 成块插到旧顺序前面，必须重新做全局时间排序。
+        store.sessions = [claudeOld, codexMiddle, codexRunning, claudeNewest]
+
+        XCTAssertEqual(
+            store.sessions(forProjectID: project.id).map(\.id),
+            [claudeNewest.id, codexRunning.id, codexMiddle.id, claudeOld.id]
+        )
     }
 
     func testWorkspaceRecentWindowKeepsKnownRunningSessionWhenFirstPageIsStale() async throws {
@@ -2517,6 +2656,65 @@ extension ConversationDataFlowTests {
         XCTAssertNil(store.selectedHistorySavingsNotice)
     }
 
+    func testLateHistoryLoadFromPreviousSelectionCannotDisconnectOrReplaceCurrentSocket() async {
+        let project = makeProject(id: "proj_history_selection_lease")
+        let first = makeSession(
+            id: "thread_history_first",
+            projectID: project.id,
+            title: "A",
+            status: "history",
+            source: "codex"
+        )
+        let second = makeSession(
+            id: "thread_history_second",
+            projectID: project.id,
+            title: "B",
+            status: "history",
+            source: "codex"
+        )
+        let client = OrderedHistoryPageClient(
+            projects: [project],
+            page: SessionsPage(sessions: [first, second])
+        )
+        let socket = MockWebSocketClient()
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: { socket }
+        )
+        store.selectedProjectID = project.id
+        await store.refreshAll(autoAttach: false)
+
+        let firstSelection = Task { await store.selectSession(first) }
+        await client.waitForHistoryRequestCount(1)
+        let secondSelection = Task { await store.selectSession(second) }
+        await client.waitForHistoryRequestCount(2)
+
+        client.resolveHistoryRequest(
+            at: 1,
+            with: HistoryMessagesPage(messages: [
+                CodexHistoryMessage(
+                    id: "rollout:second",
+                    role: "assistant",
+                    content: "B 历史",
+                    createdAt: Date(timeIntervalSince1970: 20)
+                )
+            ])
+        )
+        _ = await secondSelection.value
+        XCTAssertEqual(store.connectedSessionID, second.id)
+
+        client.failHistoryRequest(at: 0, with: MockError.timeout)
+        _ = await firstSelection.value
+
+        XCTAssertEqual(store.selectedSessionID, second.id)
+        XCTAssertEqual(store.connectedSessionID, second.id)
+        XCTAssertEqual(socket.connectedSessionIDs.last, second.id)
+        XCTAssertFalse(store.statusMessage?.contains("完整历史加载失败") == true)
+    }
+
     func testConcurrentRunningHistoryFirstPageLoadsCoalesceRequest() async {
         let project = makeProject(id: "proj_1")
         let running = makeSession(id: "codex_running", projectID: project.id, title: "运行中", status: "running", source: "codex")
@@ -2677,7 +2875,10 @@ extension ConversationDataFlowTests {
         await manualRefreshTask.value
 
         XCTAssertEqual(store.selectedHistorySavingsNotice?.kind, .fullFailed)
-        XCTAssertTrue(store.statusMessage?.contains("完整历史加载失败") == true)
+        XCTAssertEqual(
+            store.statusMessage,
+            L10n.format("ui.full_history_loading_failed_value", MockError.timeout.localizedDescription)
+        )
         XCTAssertFalse(store.isRefreshingSelectedSession)
         XCTAssertEqual(conversationStore.messages(for: history.id).map(\.content), ["已缓存历史"])
     }
@@ -2794,6 +2995,137 @@ extension ConversationDataFlowTests {
 
         XCTAssertEqual(conversationStore.messages(for: history.id).map(\.content), ["自动缩略历史"])
         XCTAssertEqual(store.selectedHistorySavingsNotice?.kind, .summaryLoaded)
+        XCTAssertTrue(store.deferredFullHistorySessionIDs.isEmpty)
+    }
+
+    func testRunningFullHistoryResponseTooLargeReloadsFullAfterTurnCompletes() async {
+        let project = makeProject(id: "proj_1")
+        let running = makeSession(
+            id: "codex_running_auto_full",
+            projectID: project.id,
+            title: "运行时历史临时膨胀",
+            status: "running",
+            source: "codex",
+            activeTurnID: "turn_running_auto_full"
+        )
+        let client = OrderedHistoryPageClient(
+            projects: [project],
+            page: SessionsPage(sessions: [running])
+        )
+        let conversationStore = ConversationStore()
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: conversationStore,
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+
+        await store.refreshAll(autoAttach: false)
+        store.upsert(running)
+        store.selectedProjectID = project.id
+        store.selectedSessionID = running.id
+
+        let initialLoadTask = Task {
+            await store.loadHistory(for: running, force: true)
+        }
+        await client.waitForHistoryRequestCount(1)
+        client.failHistoryRequest(
+            at: 0,
+            with: historyPolicyError(reason: "history_response_too_large")
+        )
+
+        await client.waitForHistoryRequestCount(2)
+        XCTAssertEqual(client.requestedMessageLoadModes, [.full, .economy])
+        XCTAssertTrue(store.deferredFullHistorySessionIDs.contains(running.id))
+        XCTAssertEqual(
+            store.selectedHistorySavingsNotice?.message,
+            L10n.text("ui.the_full_history_will_be_restored_after_the_current_turn")
+        )
+
+        // 覆盖竞态：Turn 可能先完成，而 summary 请求仍在途。此时不能启动并发 full，
+        // 但 summary 返回后必须继续补拉。
+        await store.applyRuntimeEvent(
+            .turnCompleted(AgentEventMetadata(
+                seq: 1,
+                sessionID: running.id,
+                turnID: "turn_running_auto_full",
+                itemID: nil,
+                messageID: nil,
+                clientMessageID: nil,
+                revision: nil,
+                createdAt: nil
+            )),
+            sessionID: running.id
+        )
+
+        XCTAssertEqual(store.selectedSessionID, running.id)
+        XCTAssertEqual(store.sessionsByID[running.id]?.status, SessionStatus.completed.rawValue)
+        XCTAssertNil(store.sessionsByID[running.id]?.activeTurnID)
+        XCTAssertTrue(store.queuedRunningTurnsBySessionID[running.id]?.isEmpty != false)
+        XCTAssertEqual(client.requestedMessageLoadModes, [.full, .economy])
+        XCTAssertTrue(store.deferredFullHistorySessionIDs.contains(running.id))
+
+        client.resolveHistoryRequest(
+            at: 1,
+            with: HistoryMessagesPage(
+                messages: [
+                    CodexHistoryMessage(
+                        id: "rollout:running-summary",
+                        role: "assistant",
+                        content: "运行中的缩略历史",
+                        createdAt: Date(timeIntervalSince1970: 20)
+                    )
+                ],
+                loadMode: .economy,
+                notice: "当前显示缩略历史。"
+            )
+        )
+        await initialLoadTask.value
+
+        XCTAssertEqual(
+            store.selectedHistorySavingsNotice?.message,
+            L10n.text("ui.the_full_history_will_be_restored_after_the_current_turn")
+        )
+
+        for _ in 0..<100 {
+            if client.requestedMessageLoadModes.count >= 3 {
+                break
+            }
+            await Task.yield()
+        }
+        XCTAssertEqual(client.requestedMessageLoadModes, [.full, .economy, .full])
+        XCTAssertFalse(store.deferredFullHistorySessionIDs.contains(running.id))
+        guard client.requestedMessageLoadModes.count >= 3 else {
+            XCTFail("Turn 完成后未触发 full 历史补拉")
+            return
+        }
+
+        client.resolveHistoryRequest(
+            at: 2,
+            with: HistoryMessagesPage(
+                messages: [
+                    CodexHistoryMessage(
+                        id: "rollout:completed-full",
+                        role: "assistant",
+                        content: "完成后的完整历史",
+                        createdAt: Date(timeIntervalSince1970: 30)
+                    )
+                ]
+            )
+        )
+        for _ in 0..<100 {
+            if store.historyLoadedQualityBySessionID[running.id] == .full {
+                break
+            }
+            await Task.yield()
+        }
+
+        XCTAssertEqual(store.historyLoadedQualityBySessionID[running.id], .full)
+        XCTAssertEqual(
+            conversationStore.messages(for: running.id).map(\.content),
+            ["完成后的完整历史"]
+        )
+        XCTAssertNil(store.selectedHistorySavingsNotice)
     }
 
     func testSummaryHistoryPolicyFailureRetriesOnceAfterRetryAfter() async {

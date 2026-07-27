@@ -40,6 +40,7 @@ func TestFileAccessPreflightTargetsExpandProtectedHomeDirectories(t *testing.T) 
 		filepath.Join(home, "Downloads"),
 		filepath.Join(home, "code"),
 		projectRealPath,
+		filepath.Join(home, "Pictures", "Photos Library.photoslibrary"),
 	} {
 		if _, ok := paths[expected]; !ok {
 			t.Fatalf("启动权限预检缺少路径 %s：%+v", expected, targets)
@@ -48,6 +49,30 @@ func TestFileAccessPreflightTargetsExpandProtectedHomeDirectories(t *testing.T) 
 	if !paths[filepath.Join(home, "Documents")].missingIsOkay {
 		t.Fatal("用户可能删除标准目录，缺失的受保护目录不应导致预检失败")
 	}
+	if !paths[filepath.Join(home, "Pictures", "Photos Library.photoslibrary")].missingIsOkay {
+		t.Fatal("没有照片图库的机器不应因为缺失该 bundle 而预检失败")
+	}
+}
+
+func TestFileAccessPreflightTargetsIncludePhotosLibraryForPicturesRoot(t *testing.T) {
+	home := t.TempDir()
+	registry, err := projects.NewRegistry(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	photosLibrary := filepath.Join(home, "Pictures", "Photos Library.photoslibrary")
+	targets := fileAccessPreflightTargets(config.Config{
+		BrowseRoots: []string{filepath.Join(home, "Pictures")},
+	}, registry, home, true)
+	for _, target := range targets {
+		if target.path == photosLibrary {
+			if !target.missingIsOkay {
+				t.Fatal("Pictures 浏览根下缺失的照片图库不应导致预检失败")
+			}
+			return
+		}
+	}
+	t.Fatalf("Pictures 单独作为浏览根时也必须预检照片图库：%+v", targets)
 }
 
 func TestRunFileAccessPreflightReadsOneDirectoryEntryAndReportsBlockedPath(t *testing.T) {

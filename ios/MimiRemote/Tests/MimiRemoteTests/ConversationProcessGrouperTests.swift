@@ -28,10 +28,11 @@ final class ConversationProcessGrouperTests: XCTestCase {
         )
 
         let activeItems = ConversationTimelineItemBuilder.items(from: [reasoning, command])
-        let activeGroup = try processGroup(in: activeItems, at: 0)
+        let activeWorkGroup = try workGroup(in: activeItems, at: 0)
+        let activeGroup = try processGroup(in: activeWorkGroup.entries, at: 0)
         XCTAssertEqual(activeGroup.title, "先检查实现，再完成修改。")
         XCTAssertEqual(activeGroup.activities.map(\.stableID), ["command-1"])
-        XCTAssertEqual(activeGroup.status, .running)
+        XCTAssertEqual(activeWorkGroup.status, .running)
 
         let completedItems = ConversationTimelineItemBuilder.items(from: [
             reasoning,
@@ -39,14 +40,16 @@ final class ConversationProcessGrouperTests: XCTestCase {
             file,
             makeAssistant(id: "assistant-1", turnID: "turn-1")
         ])
-        let completedGroup = try processGroup(in: completedItems, at: 0)
+        let completedWorkGroup = try workGroup(in: completedItems, at: 0)
+        let completedGroup = try processGroup(in: completedWorkGroup.entries, at: 0)
+        XCTAssertEqual(completedWorkGroup.id, activeWorkGroup.id)
         XCTAssertEqual(completedGroup.id, activeGroup.id)
         XCTAssertEqual(completedGroup.activities.map(\.stableID), ["command-1", "file-1"])
-        XCTAssertEqual(completedGroup.status, .completed)
+        XCTAssertEqual(completedWorkGroup.status, .completed)
         XCTAssertEqual(completedItems.count, 2)
     }
 
-    func testCommentaryDoesNotStartProcessGroup() {
+    func testCommentaryAndCommandFormOuterWorkGroupInSourceOrder() throws {
         let commentary = ConversationMessage(
             stableID: "commentary-1",
             turnID: "turn-commentary",
@@ -69,16 +72,14 @@ final class ConversationProcessGrouperTests: XCTestCase {
 
         let items = ConversationTimelineItemBuilder.items(from: [commentary, command])
 
-        XCTAssertEqual(items.count, 2)
-        guard case .message(let visibleCommentary) = items[0] else {
-            return XCTFail("commentary 必须保持正文，不能作为阶段标题")
-        }
-        XCTAssertEqual(visibleCommentary.kind, .commentary)
-        guard case .activityBatch(let visibleCommands) = items[1] else {
-            return XCTFail("没有 reasoning 标题时命令应进入稳定活动批次")
+        let group = try workGroup(in: items, at: 0)
+        XCTAssertEqual(group.entries.count, 2)
+        guard case .commentary(let visibleCommentary) = group.entries[0],
+              case .activityBatch(let visibleCommands) = group.entries[1] else {
+            return XCTFail("外层组必须按 commentary→activity 保留原始顺序")
         }
         XCTAssertEqual(visibleCommands.messages.map(\.stableID), ["command-commentary"])
-        XCTAssertEqual(visibleCommands.status, .completed)
+        XCTAssertEqual(visibleCommentary.kind, .commentary)
     }
 
     func testLatestReasoningUpdatesSingleGroupWithoutChangingIdentity() throws {
@@ -98,7 +99,8 @@ final class ConversationProcessGrouperTests: XCTestCase {
         )
 
         let firstItems = ConversationTimelineItemBuilder.items(from: [firstReasoning, firstCommand])
-        let firstGroup = try processGroup(in: firstItems, at: 0)
+        let firstWorkGroup = try workGroup(in: firstItems, at: 0)
+        let firstGroup = try processGroup(in: firstWorkGroup.entries, at: 0)
 
         let items = ConversationTimelineItemBuilder.items(from: [
             firstReasoning,
@@ -107,8 +109,9 @@ final class ConversationProcessGrouperTests: XCTestCase {
             secondCommand
         ])
 
-        XCTAssertEqual(items.count, 1)
-        let updatedGroup = try processGroup(in: items, at: 0)
+        let updatedWorkGroup = try workGroup(in: items, at: 0)
+        let updatedGroup = try processGroup(in: updatedWorkGroup.entries, at: 0)
+        XCTAssertEqual(updatedWorkGroup.id, firstWorkGroup.id)
         XCTAssertEqual(updatedGroup.id, firstGroup.id)
         XCTAssertEqual(updatedGroup.title, "再验证修复")
         XCTAssertEqual(updatedGroup.activities.map(\.stableID), ["command-a", "command-b"])
@@ -125,26 +128,42 @@ final class ConversationProcessGrouperTests: XCTestCase {
 
         let items = ConversationTimelineItemBuilder.items(from: [reasoning, otherTurnCommand])
 
-        XCTAssertEqual(items.count, 1)
-        guard case .activityBatch(let standaloneCommand) = items[0] else {
-            return XCTFail("跨 turn 命令应进入自己的活动批次")
+        let group = try? workGroup(in: items, at: 0)
+        guard let group,
+              case .activityBatch(let standaloneCommand) = group.entries.first else {
+            return XCTFail("跨 turn 命令应进入自己的外层工作组")
         }
         XCTAssertEqual(standaloneCommand.messages.map(\.stableID), ["command-turn-b"])
     }
 
     func testBuilderKeepsLargeAlternatingTimelineSemanticsAndCachesTailID() {
         var messages: [ConversationMessage] = []
+        messages.reserveCapacity(1_500)
         for index in 0..<500 {
             let turnID = "turn-linear-\(index)"
             messages.append(makeReasoning(id: "reasoning-linear-\(index)", turnID: turnID, text: "检查 \(index)"))
+            messages.append(makeActivity(
+                id: "command-linear-\(index)",
+                turnID: turnID,
+                kind: .commandSummary,
+                payload: ConversationActivityPayload(
+                    category: .runCommand,
+                    displayTitle: "运行 \(index)",
+                    status: "completed"
+                )
+            ))
             messages.append(makeAssistant(id: "assistant-linear-\(index)", turnID: turnID))
         }
 
         let cache = ConversationTimelineItemCache()
         let snapshot = cache.snapshot(from: messages)
 
-        // reasoning 没有真实子活动时只是内部阶段标题，不会单独占据主时间线。
-        XCTAssertEqual(snapshot.items.count, 500)
+        // 每个 turn 线性投影成一个 work group + 一个 final，没有跨 turn 吞并。
+        XCTAssertEqual(snapshot.items.count, 1_000)
+        XCTAssertEqual(snapshot.items.filter {
+            if case .workGroup = $0 { return true }
+            return false
+        }.count, 500)
         XCTAssertEqual(snapshot.tailItemID, snapshot.items.last?.id)
         XCTAssertEqual(cache.tailItemID, snapshot.tailItemID)
     }
@@ -187,7 +206,8 @@ final class ConversationProcessGrouperTests: XCTestCase {
         XCTAssertEqual(visiblePending.stableID, "pending-input")
 
         let submittedItems = ConversationTimelineItemBuilder.items(from: [reasoning, command, submitted])
-        guard case .processGroup(let group) = submittedItems.first else {
+        guard case .workGroup(let workGroup) = submittedItems.first,
+              case .processGroup(let group) = workGroup.entries.first else {
             return XCTFail("已提交结果可以作为阶段里程碑收进组内")
         }
         XCTAssertEqual(group.activities.map(\.stableID), ["command-input", "submitted-input"])
@@ -237,20 +257,21 @@ final class ConversationProcessGrouperTests: XCTestCase {
             trailingCommand
         ])
 
-        XCTAssertEqual(items.count, 5)
-        let firstGroup = try processGroup(in: items, at: 0)
+        let workGroup = try workGroup(in: items, at: 0)
+        XCTAssertEqual(workGroup.entries.count, 5)
+        let firstGroup = try processGroup(in: workGroup.entries, at: 0)
         XCTAssertEqual(firstGroup.title, "先检查登录链路")
         XCTAssertEqual(firstGroup.activities.map(\.stableID), ["command-first"])
-        guard case .message(let firstVisible) = items[1],
-              case .message(let secondVisible) = items[3] else {
-            return XCTFail("commentary 应保持正文，不能隐藏或替代相邻过程组")
+        guard case .commentary(let firstVisible) = workGroup.entries[1],
+              case .commentary(let secondVisible) = workGroup.entries[3] else {
+            return XCTFail("commentary 应在外层组中保持正文和 source order")
         }
         XCTAssertEqual(firstVisible.kind, .commentary)
         XCTAssertEqual(secondVisible.kind, .commentary)
-        let secondGroup = try processGroup(in: items, at: 2)
+        let secondGroup = try processGroup(in: workGroup.entries, at: 2)
         XCTAssertEqual(secondGroup.title, "检查私钥配置")
         XCTAssertEqual(secondGroup.activities.map(\.stableID), ["command-second"])
-        let trailingGroup = try processGroup(in: items, at: 4)
+        let trailingGroup = try processGroup(in: workGroup.entries, at: 4)
         XCTAssertEqual(trailingGroup.title, "Planning credential validation")
         XCTAssertEqual(trailingGroup.activities.map(\.stableID), ["command-trailing"])
     }
@@ -290,12 +311,472 @@ final class ConversationProcessGrouperTests: XCTestCase {
         ])
 
         XCTAssertEqual(items.count, 3)
-        XCTAssertEqual(try processGroup(in: items, at: 0).activities.map(\.stableID), ["command-before-final"])
+        let firstWorkGroup = try workGroup(in: items, at: 0)
+        XCTAssertEqual(
+            try processGroup(in: firstWorkGroup.entries, at: 0).activities.map(\.stableID),
+            ["command-before-final"]
+        )
         guard case .message(let visibleFinal) = items[1] else {
             return XCTFail("最终回答应保持原始位置")
         }
         XCTAssertEqual(visibleFinal.stableID, "assistant-final-boundary")
-        XCTAssertEqual(try processGroup(in: items, at: 2).activities.map(\.stableID), ["command-after-final"])
+        let trailingWorkGroup = try workGroup(in: items, at: 2)
+        XCTAssertEqual(
+            try processGroup(in: trailingWorkGroup.entries, at: 0).activities.map(\.stableID),
+            ["command-after-final"]
+        )
+    }
+
+    func testWorkGroupCollectsCommentaryActivitiesAndStopsBeforeFinal() throws {
+        let turnID = "turn-work-stream"
+        let first = ConversationMessage(
+            stableID: "commentary-work-1",
+            turnID: turnID,
+            role: .assistant,
+            kind: .commentary,
+            content: "先检查实现。",
+            createdAt: Date(timeIntervalSince1970: 100),
+            sendStatus: .confirmed,
+            turnLifecycle: .inProgress
+        )
+        let command = ConversationMessage(
+            stableID: "command-work",
+            turnID: turnID,
+            role: .system,
+            kind: .commandSummary,
+            content: "运行测试",
+            createdAt: Date(timeIntervalSince1970: 104),
+            sendStatus: .confirmed,
+            activityPayload: ConversationActivityPayload(
+                category: .runCommand,
+                displayTitle: "运行测试",
+                status: "completed"
+            ),
+            turnLifecycle: .inProgress
+        )
+        let second = ConversationMessage(
+            stableID: "commentary-work-2",
+            turnID: turnID,
+            role: .assistant,
+            kind: .commentary,
+            content: "测试通过，准备总结。",
+            createdAt: Date(timeIntervalSince1970: 110),
+            sendStatus: .confirmed,
+            turnLifecycle: .completed
+        )
+        let final = ConversationMessage(
+            stableID: "final-work",
+            turnID: turnID,
+            role: .assistant,
+            content: "已经完成。",
+            createdAt: Date(timeIntervalSince1970: 174),
+            sendStatus: .confirmed,
+            turnLifecycle: .completed
+        )
+
+        let items = ConversationTimelineItemBuilder.items(from: [first, command, second, final])
+
+        XCTAssertEqual(items.count, 2)
+        let group = try workGroup(in: items, at: 0)
+        XCTAssertEqual(group.status, .completed)
+        XCTAssertEqual(group.entries.count, 3)
+        guard case .commentary(let firstEntry) = group.entries[0],
+              case .activityBatch = group.entries[1],
+              case .commentary(let lastEntry) = group.entries[2],
+              case .message(let visibleFinal) = items[1] else {
+            return XCTFail("外层组必须保持 commentary→activity→commentary，final 永远独立")
+        }
+        XCTAssertEqual(firstEntry.stableID, "commentary-work-1")
+        XCTAssertEqual(lastEntry.stableID, "commentary-work-2")
+        XCTAssertEqual(visibleFinal.stableID, "final-work")
+        XCTAssertEqual(group.startedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(group.endedAt, Date(timeIntervalSince1970: 174))
+        XCTAssertEqual(group.duration(at: Date(timeIntervalSince1970: 999)), 74)
+    }
+
+    func testWorkGroupResolvesAllFourStatusesWithTurnPrecedence() throws {
+        func status(for lifecycle: ConversationTurnLifecycle) throws -> ConversationActivityGroupStatus {
+            let message = ConversationMessage(
+                stableID: "status-\(lifecycle.rawValue)",
+                turnID: "turn-status-\(lifecycle.rawValue)",
+                role: .system,
+                kind: .commandSummary,
+                content: "运行命令",
+                createdAt: Date(timeIntervalSince1970: 10),
+                sendStatus: .confirmed,
+                activityPayload: ConversationActivityPayload(
+                    category: .runCommand,
+                    displayTitle: "运行命令",
+                    status: lifecycle == .inProgress ? "running" : "completed"
+                ),
+                turnLifecycle: lifecycle
+            )
+            return try workGroup(
+                in: ConversationTimelineItemBuilder.items(from: [message]),
+                at: 0
+            ).status
+        }
+
+        XCTAssertEqual(try status(for: .inProgress), .running)
+        XCTAssertEqual(try status(for: .completed), .completed)
+        XCTAssertEqual(try status(for: .interrupted), .interrupted)
+        XCTAssertEqual(try status(for: .failed), .failed)
+    }
+
+    func testHardBoundariesNeverMoveEntriesAcrossPlanPendingErrorOrFinal() throws {
+        let turnID = "turn-hard-boundary"
+        func command(_ id: String) -> ConversationMessage {
+            ConversationMessage(
+                stableID: id,
+                turnID: turnID,
+                role: .system,
+                kind: .commandSummary,
+                content: id,
+                sendStatus: .confirmed,
+                activityPayload: ConversationActivityPayload(
+                    category: .runCommand,
+                    displayTitle: id,
+                    status: "completed"
+                ),
+                turnLifecycle: .inProgress
+            )
+        }
+        let plan = ConversationMessage(
+            stableID: "plan-boundary",
+            turnID: turnID,
+            role: .assistant,
+            kind: .plan,
+            content: "计划",
+            sendStatus: .confirmed
+        )
+        let pending = ConversationMessage(
+            stableID: "pending-boundary",
+            turnID: turnID,
+            role: .system,
+            kind: .approval,
+            content: "是否允许？",
+            sendStatus: .confirmed
+        )
+        let error = ConversationMessage(
+            stableID: "error-boundary",
+            turnID: turnID,
+            role: .system,
+            kind: .error,
+            content: "连接失败",
+            sendStatus: .confirmed
+        )
+        let final = makeAssistant(id: "final-boundary", turnID: turnID)
+
+        let items = ConversationTimelineItemBuilder.items(from: [
+            command("command-a"),
+            plan,
+            command("command-b"),
+            pending,
+            command("command-c"),
+            error,
+            command("command-d"),
+            final,
+            command("command-after-final")
+        ])
+
+        XCTAssertEqual(items.count, 9)
+        for index in stride(from: 0, through: 8, by: 2) {
+            _ = try workGroup(in: items, at: index)
+        }
+        guard case .message(let visiblePlan) = items[1],
+              case .message(let visiblePending) = items[3],
+              case .message(let visibleError) = items[5],
+              case .message(let visibleFinal) = items[7] else {
+            return XCTFail("所有硬边界必须保留原槽位")
+        }
+        XCTAssertEqual(visiblePlan.kind, .plan)
+        XCTAssertEqual(visiblePending.kind, .approval)
+        XCTAssertEqual(visibleError.kind, .error)
+        XCTAssertEqual(visibleFinal.role, .assistant)
+    }
+
+    func testTurnChangeEmptyTurnAndUserMessageAreHardBoundaries() throws {
+        let turnA = makeActivity(
+            id: "turn-a-command",
+            turnID: "turn-a",
+            kind: .commandSummary,
+            payload: ConversationActivityPayload(category: .runCommand, displayTitle: "A", status: "completed")
+        )
+        let turnB = makeActivity(
+            id: "turn-b-command",
+            turnID: "turn-b",
+            kind: .commandSummary,
+            payload: ConversationActivityPayload(category: .runCommand, displayTitle: "B", status: "completed")
+        )
+        var emptyTurn = makeActivity(
+            id: "empty-turn-command",
+            turnID: "placeholder",
+            kind: .commandSummary,
+            payload: ConversationActivityPayload(category: .runCommand, displayTitle: "无 turn", status: "completed")
+        )
+        emptyTurn.turnID = ""
+        let user = ConversationMessage(
+            stableID: "user-boundary",
+            turnID: "turn-b",
+            role: .user,
+            content: "继续",
+            sendStatus: .confirmed
+        )
+
+        let items = ConversationTimelineItemBuilder.items(from: [turnA, turnB, emptyTurn, user])
+
+        XCTAssertEqual(items.count, 4)
+        XCTAssertEqual(try workGroup(in: items, at: 0).turnID, "turn-a")
+        XCTAssertEqual(try workGroup(in: items, at: 1).turnID, "turn-b")
+        guard case .activityBatch = items[2], case .message(let visibleUser) = items[3] else {
+            return XCTFail("空 turn 过程项和用户消息都必须保持边界")
+        }
+        XCTAssertEqual(visibleUser.role, .user)
+    }
+
+    func testWorkGroupIDStaysStableAcrossDeltaAppendAndTerminalTransition() throws {
+        let commentaryID = UUID()
+        var commentary = ConversationMessage(
+            id: commentaryID,
+            stableID: "stable-commentary",
+            turnID: "turn-stable-work",
+            role: .assistant,
+            kind: .commentary,
+            content: "检查",
+            sendStatus: .confirmed,
+            turnLifecycle: .inProgress
+        )
+        var command = makeActivity(
+            id: "stable-command",
+            turnID: "turn-stable-work",
+            kind: .commandSummary,
+            payload: ConversationActivityPayload(category: .runCommand, displayTitle: "运行", status: "running")
+        )
+        command.turnLifecycle = .inProgress
+        let running = try workGroup(
+            in: ConversationTimelineItemBuilder.items(from: [commentary, command]),
+            at: 0
+        )
+
+        commentary.appendContent("更多内容")
+        commentary.turnLifecycle = .completed
+        command.turnLifecycle = .completed
+        let completed = try workGroup(
+            in: ConversationTimelineItemBuilder.items(from: [
+                commentary,
+                command,
+                makeAssistant(id: "stable-final", turnID: "turn-stable-work")
+            ]),
+            at: 0
+        )
+
+        XCTAssertEqual(running.id, "work:turn-stable-work:\(commentaryID.uuidString)")
+        XCTAssertEqual(completed.id, running.id)
+        XCTAssertEqual(running.status, .running)
+        XCTAssertEqual(completed.status, .completed)
+    }
+
+    func testDurationClampsNegativeValuesAndDoesNotInventFallbackTime() {
+        let negative = ConversationWorkGroup(
+            id: "negative",
+            turnID: "turn-duration",
+            entries: [],
+            status: .completed,
+            startedAt: Date(timeIntervalSince1970: 20),
+            endedAt: Date(timeIntervalSince1970: 10)
+        )
+        XCTAssertEqual(negative.duration(), 0)
+
+        let fallbackCommand = ConversationMessage(
+            stableID: "fallback-command",
+            turnID: "turn-fallback-duration",
+            role: .system,
+            kind: .commandSummary,
+            content: "运行",
+            createdAt: Date(timeIntervalSince1970: 10),
+            sendStatus: .confirmed,
+            activityPayload: ConversationActivityPayload(
+                category: .runCommand,
+                displayTitle: "运行",
+                status: "completed"
+            ),
+            turnLifecycle: .completed,
+            isTimestampFallback: true
+        )
+        guard case .workGroup(let fallbackGroup) = ConversationTimelineItemBuilder.items(from: [fallbackCommand]).first else {
+            return XCTFail("真实活动应形成 work group")
+        }
+        XCTAssertNil(fallbackGroup.startedAt)
+        XCTAssertNil(fallbackGroup.duration())
+    }
+
+    func testDurationFindsReliableTimesAfterFallbackEntries() throws {
+        let turnID = "turn-reliable-duration"
+        let fallbackCommentary = ConversationMessage(
+            stableID: "fallback-commentary",
+            turnID: turnID,
+            role: .assistant,
+            kind: .commentary,
+            content: "正在准备",
+            createdAt: Date(timeIntervalSince1970: 10),
+            sendStatus: .confirmed,
+            isTimestampFallback: true
+        )
+        let command = ConversationMessage(
+            stableID: "reliable-command",
+            turnID: turnID,
+            role: .system,
+            kind: .commandSummary,
+            content: "运行",
+            createdAt: Date(timeIntervalSince1970: 20),
+            updatedAt: Date(timeIntervalSince1970: 25),
+            sendStatus: .confirmed,
+            activityPayload: ConversationActivityPayload(
+                category: .runCommand,
+                displayTitle: "运行",
+                status: "completed"
+            )
+        )
+        let fallbackTail = ConversationMessage(
+            stableID: "fallback-tail",
+            turnID: turnID,
+            role: .assistant,
+            kind: .commentary,
+            content: "准备总结",
+            createdAt: Date(timeIntervalSince1970: 30),
+            sendStatus: .confirmed,
+            isTimestampFallback: true
+        )
+        let planBoundary = ConversationMessage(
+            stableID: "plan-after-work",
+            turnID: turnID,
+            role: .assistant,
+            kind: .plan,
+            content: "下一步",
+            createdAt: Date(timeIntervalSince1970: 200),
+            sendStatus: .confirmed
+        )
+
+        let group = try workGroup(
+            in: ConversationTimelineItemBuilder.items(from: [
+                fallbackCommentary,
+                command,
+                fallbackTail,
+                planBoundary
+            ]),
+            at: 0
+        )
+
+        XCTAssertEqual(group.startedAt, Date(timeIntervalSince1970: 20))
+        XCTAssertEqual(group.endedAt, Date(timeIntervalSince1970: 25))
+        XCTAssertEqual(group.duration(), 5)
+    }
+
+    func testUnrelatedFailedBoundaryDoesNotPollutePreviousWorkGroup() throws {
+        let command = ConversationMessage(
+            stableID: "previous-turn-command",
+            turnID: "turn-previous",
+            role: .system,
+            kind: .commandSummary,
+            content: "完成上一轮",
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 12),
+            sendStatus: .confirmed,
+            activityPayload: ConversationActivityPayload(
+                category: .runCommand,
+                displayTitle: "完成上一轮",
+                status: "completed"
+            )
+        )
+        let failedUser = ConversationMessage(
+            stableID: "next-turn-failed-user",
+            turnID: "turn-next",
+            role: .user,
+            content: "发送失败",
+            createdAt: Date(timeIntervalSince1970: 100),
+            sendStatus: .failed
+        )
+
+        let group = try workGroup(
+            in: ConversationTimelineItemBuilder.items(from: [command, failedUser]),
+            at: 0
+        )
+
+        XCTAssertEqual(group.status, .completed)
+        XCTAssertEqual(group.endedAt, Date(timeIntervalSince1970: 12))
+        XCTAssertEqual(group.duration(), 2)
+    }
+
+    func testTimelineCacheInvalidatesWhenLifecycleOrOrdinalChanges() throws {
+        var command = makeActivity(
+            id: "cache-command",
+            turnID: "turn-cache",
+            kind: .commandSummary,
+            payload: ConversationActivityPayload(category: .runCommand, displayTitle: "运行", status: "running")
+        )
+        command.turnLifecycle = .inProgress
+        command.timelineOrdinal = 1
+        let cache = ConversationTimelineItemCache()
+        let running = try workGroup(in: cache.snapshot(from: [command]).items, at: 0)
+
+        command.turnLifecycle = .completed
+        let completed = try workGroup(in: cache.snapshot(from: [command]).items, at: 0)
+        XCTAssertEqual(running.status, .running)
+        XCTAssertEqual(completed.status, .completed)
+
+        command.timelineOrdinal = 2
+        let ordinalSnapshot = cache.snapshot(from: [command])
+        guard case .workGroup(let ordinalGroup) = ordinalSnapshot.items.first,
+              case .activityBatch(let batch) = ordinalGroup.entries.first else {
+            return XCTFail("ordinal 更新后应重建同一语义快照")
+        }
+        XCTAssertEqual(batch.messages.first?.timelineOrdinal, 2)
+    }
+
+    func testCodexAndClaudeNormalizedMessagesProduceEquivalentWorkProjection() throws {
+        func normalized(provider: String) -> [ConversationMessage] {
+            let turnID = "\(provider)-turn"
+            return [
+                makeCommentary(id: "\(provider)-commentary", turnID: turnID, text: "正在检查"),
+                makeActivity(
+                    id: "\(provider)-command",
+                    turnID: turnID,
+                    kind: .commandSummary,
+                    payload: ConversationActivityPayload(
+                        category: .toolCall,
+                        displayTitle: "读取文件",
+                        status: "completed"
+                    )
+                ),
+                makeAssistant(id: "\(provider)-final", turnID: turnID)
+            ]
+        }
+        func signature(_ group: ConversationWorkGroup) -> [String] {
+            group.entries.map { entry in
+                switch entry {
+                case .commentary:
+                    return "commentary"
+                case .activity:
+                    return "activity"
+                case .activityBatch:
+                    return "activityBatch"
+                case .processGroup:
+                    return "processGroup"
+                }
+            }
+        }
+
+        let codex = try workGroup(
+            in: ConversationTimelineItemBuilder.items(from: normalized(provider: "codex")),
+            at: 0
+        )
+        let claude = try workGroup(
+            in: ConversationTimelineItemBuilder.items(from: normalized(provider: "claude")),
+            at: 0
+        )
+        XCTAssertEqual(signature(codex), signature(claude))
+        XCTAssertEqual(codex.status, claude.status)
+        XCTAssertEqual(codex.activityCount, claude.activityCount)
     }
 
     func testRecoverableChildFailureDoesNotFailWholeProcessGroup() throws {
@@ -333,6 +814,23 @@ final class ConversationProcessGrouperTests: XCTestCase {
         }
         XCTAssertEqual(completedGroup.status, .completed)
         XCTAssertEqual(completedGroup.failedCount, 1)
+
+        var recoveredReasoning = reasoning
+        recoveredReasoning.turnLifecycle = .completed
+        var recoveredCommand = failedCommand
+        recoveredCommand.turnLifecycle = .completed
+        let recoveredWorkGroup = try workGroup(
+            in: ConversationTimelineItemBuilder.items(from: [
+                recoveredReasoning,
+                recoveredCommand
+            ]),
+            at: 0
+        )
+        XCTAssertEqual(
+            recoveredWorkGroup.status,
+            .completed,
+            "子命令失败但 turn 已恢复完成时，外层工作流不能误报失败"
+        )
 
         let failed = ConversationProcessGrouper.elements(
             from: [reasoning, failedCommand],
@@ -454,11 +952,21 @@ final class ConversationProcessGrouperTests: XCTestCase {
     }
 
     private func processGroup(
-        in items: [ConversationTimelineItem],
+        in entries: [ConversationWorkGroupEntry],
         at index: Int
     ) throws -> ConversationProcessGroup {
-        guard case .processGroup(let group) = items[index] else {
+        guard case .processGroup(let group) = entries[index] else {
             throw ProcessGroupTestError.expectedGroup
+        }
+        return group
+    }
+
+    private func workGroup(
+        in items: [ConversationTimelineItem],
+        at index: Int
+    ) throws -> ConversationWorkGroup {
+        guard case .workGroup(let group) = items[index] else {
+            throw ProcessGroupTestError.expectedWorkGroup
         }
         return group
     }
@@ -521,4 +1029,5 @@ final class ConversationProcessGrouperTests: XCTestCase {
 
 private enum ProcessGroupTestError: Error {
     case expectedGroup
+    case expectedWorkGroup
 }

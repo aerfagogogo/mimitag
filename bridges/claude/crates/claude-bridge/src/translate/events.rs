@@ -212,7 +212,8 @@ impl EventTranslatorState {
             | ClaudeOutbound::ControlRequest(_)
             | ClaudeOutbound::ControlResponse(_)
             | ClaudeOutbound::StreamlinedText(_)
-            | ClaudeOutbound::StreamlinedToolUseSummary(_) => Vec::new(),
+            | ClaudeOutbound::StreamlinedToolUseSummary(_)
+            | ClaudeOutbound::Other => Vec::new(),
         }
     }
 
@@ -1161,7 +1162,8 @@ fn event_parent_tool_use_id(event: &ClaudeOutbound) -> Option<&str> {
         | ClaudeOutbound::ControlRequest(_)
         | ClaudeOutbound::ControlResponse(_)
         | ClaudeOutbound::StreamlinedText(_)
-        | ClaudeOutbound::StreamlinedToolUseSummary(_) => None,
+        | ClaudeOutbound::StreamlinedToolUseSummary(_)
+        | ClaudeOutbound::Other => None,
     }
 }
 

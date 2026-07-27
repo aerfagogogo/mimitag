@@ -42,6 +42,13 @@ type Router struct {
 	tailscalePathLookup tailscaleNetworkPathLookup
 	// upstreamReadiness 对高频 readyz 轮询做短 TTL + single-flight，避免每 300ms 都创建 WebSocket。
 	upstreamReadiness *appServerReadinessProbe
+	// runtimeStatus 只服务本机菜单栏。额度探测可能访问 OAuth/Keychain 和 provider，
+	// 必须后台 single-flight 刷新，不能阻塞 readiness 或并发创建无上限连接。
+	runtimeStatus *runtimeStatusSnapshotCache
+	// Codex app-server 由 serve 层启动、由 Router 探测。单独保存真实子进程启动时间，
+	// 让菜单栏展示运行时长，而不是误用 agentd 或 Mac App 自身的存活时间。
+	runtimeProcessMu      sync.RWMutex
+	codexRuntimeStartedAt time.Time
 	// pairingClaims 只记录短期票据的签名和过期时间，不保存长期 Token。
 	// 状态仅需覆盖当前进程内的短期重放窗口，服务重启后丢失是可接受的 MVP 取舍。
 	pairingClaimsMu sync.Mutex
@@ -56,6 +63,7 @@ type Router struct {
 	claudeMu                      sync.Mutex
 	claudeProbe                   appServerBridgeProbe
 	activeClaudeBridge            int
+	claudeBridge                  *claudeBridgeSupervisor
 	managedWorktreesMu            sync.Mutex
 	managedWorktrees              map[string]managedWorktree
 	managedWorktreeCleanupMu      sync.Mutex
@@ -69,10 +77,15 @@ type Router struct {
 }
 
 func NewRouter(cfg config.Config, registry *projects.Registry, manager *session.Manager, checker *doctor.Checker, version string) http.Handler {
-	return NewRouterWithRuntime(cfg, registry, manager, checker, version, nil)
+	handler, _ := NewRouterWithRuntime(cfg, registry, manager, checker, version, nil)
+	return handler
 }
 
-func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manager *session.Manager, checker *doctor.Checker, version string, runtime SessionRuntime) http.Handler {
+// NewRouterWithRuntime also hands back the *Router so a caller that owns the
+// process lifetime can shut down what the handler started. That matters now
+// that the Claude bridge is resident: it survives individual connections by
+// design, so nothing else would ever reap it.
+func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manager *session.Manager, checker *doctor.Checker, version string, runtime SessionRuntime) (http.Handler, *Router) {
 	r := &Router{
 		cfg:      cfg,
 		projects: registry,
@@ -96,9 +109,11 @@ func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manage
 		managedWorktreePendingUses:  map[string]int{},
 		gitTestFlightJobs:           map[string]*gitTestFlightReleaseJob{},
 		pairingClaims:               map[string]time.Time{},
+		claudeBridge:                newClaudeBridgeSupervisor(),
 	}
 	r.refreshClaudeBridgeProbe(false)
 	r.upstreamReadiness = newAppServerReadinessProbe(r.probeAppServerUpstream)
+	r.runtimeStatus = newRuntimeStatusSnapshotCache(r.refreshRuntimeStatus, r.runtimeStatusPlaceholder)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", r.healthz)
@@ -140,10 +155,23 @@ func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manage
 	mux.Handle("/api/voice/transcribe", r.auth.Middleware(http.HandlerFunc(r.voiceTranscribeHandler)))
 	mux.Handle("/api/team/bootstrap", r.auth.Middleware(http.HandlerFunc(r.teamBootstrapHandler)))
 	mux.Handle("/api/team/messages", r.auth.Middleware(http.HandlerFunc(r.teamMessagesHandler)))
+	mux.Handle("/api/runtime/status", r.auth.Middleware(http.HandlerFunc(r.runtimeStatusHandler)))
 	mux.Handle("/api/app-server/config", r.auth.Middleware(http.HandlerFunc(r.appServerConfigHandler)))
 	mux.Handle("/api/app-server/history-media/", r.auth.Middleware(http.HandlerFunc(r.appServerHistoryMediaHandler)))
 	mux.Handle("/api/app-server/ws", r.auth.Middleware(http.HandlerFunc(r.appServerGatewayWS)))
-	return logging(limitAPIRequestBodies(mux), r.monitor)
+	return logging(limitAPIRequestBodies(mux), r.monitor), r
+}
+
+// Shutdown releases the long-lived runtimes the router started. Call it after
+// the HTTP server has drained: the resident Claude bridge spawns Claude Code
+// children of its own, and killing it earlier would cut turns that in-flight
+// requests are still watching.
+func (r *Router) Shutdown() {
+	if r == nil {
+		return
+	}
+	r.runtimeStatus.Close()
+	r.claudeBridge.shutdown()
 }
 
 func sameOriginOrNoOrigin(r *http.Request) bool {
@@ -262,7 +290,7 @@ func (r *Router) healthz(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) readyz(w http.ResponseWriter, req *http.Request) {
-	results := r.doctor.Run(req.Context(), false)
+	results := r.doctor.RunReadiness(req.Context())
 	results = appendReadinessCheck(results, r.appServerUpstreamReadinessCheck(req.Context()))
 	status := http.StatusOK
 	if !results.OK {

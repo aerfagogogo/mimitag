@@ -357,7 +357,21 @@ struct SkillInvocationCard: View {
                 .padding(.top, 2)
         }
         .padding(10)
-        .background(usesUserBubbleContrast ? Color.white.opacity(0.1) : tint.opacity(0.08), in: shape)
+        .background {
+            if usesUserBubbleContrast {
+                shape.fill(Color.white.opacity(0.1))
+            } else if tokens.resolvedScheme == .light {
+                // 浅色用户气泡是中性浅表面，卡片再用主题表面加少量品牌色，
+                // 避免信息与外层背景粘在一起。
+                shape
+                    .fill(tokens.surface)
+                    .overlay {
+                        shape.fill(tint.opacity(0.08))
+                    }
+            } else {
+                shape.fill(tint.opacity(0.08))
+            }
+        }
         .overlay {
             shape.strokeBorder(
                 sendStatus == .failed

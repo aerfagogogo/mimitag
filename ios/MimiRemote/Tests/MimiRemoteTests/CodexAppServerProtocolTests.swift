@@ -148,15 +148,57 @@ final class CodexAppServerProtocolTests: XCTestCase {
         let response = try decoder.decode(CodexAppServerMessage.self, from: Data(#"{"id":1,"result":{"ok":true}}"#.utf8))
         XCTAssertEqual(response, .response(CodexAppServerResponse(id: .int(1), result: .object(["ok": .bool(true)]), error: nil)))
 
-        let notification = try decoder.decode(CodexAppServerMessage.self, from: Data(#"{"method":"turn/started","params":{"threadId":"t1"}}"#.utf8))
-        XCTAssertEqual(notification, .notification(CodexAppServerNotification(method: "turn/started", params: .object(["threadId": .string("t1")]))))
+        let notification = try decoder.decode(CodexAppServerMessage.self, from: Data(#"{"method":"turn/started","params":{"threadId":"t1"},"_alleycat_seq":17}"#.utf8))
+        XCTAssertEqual(notification, .notification(CodexAppServerNotification(
+            method: "turn/started",
+            params: .object(["threadId": .string("t1")]),
+            replaySequence: 17
+        )))
 
-        let serverRequest = try decoder.decode(CodexAppServerMessage.self, from: Data(#"{"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"t1"}}"#.utf8))
+        let serverRequest = try decoder.decode(CodexAppServerMessage.self, from: Data(#"{"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"t1"},"_alleycat_seq":18}"#.utf8))
         XCTAssertEqual(serverRequest, .serverRequest(CodexAppServerServerRequest(
             id: .string("approval-1"),
             method: "item/commandExecution/requestApproval",
-            params: .object(["threadId": .string("t1")])
+            params: .object(["threadId": .string("t1")]),
+            replaySequence: 18
         )))
+    }
+
+    func testTurnSendOutcomeOnlyTreatsExplicitPreAcceptanceErrorsAsRejected() {
+        let rejectedByData = CodexAppServerConnectionError.appServer(CodexAppServerError(
+            code: -32603,
+            message: "runtime override rejected",
+            data: .object(["accepted": .bool(false)])
+        ))
+        let invalidParams = CodexAppServerConnectionError.appServer(CodexAppServerError(
+            code: -32602,
+            message: "invalid params",
+            data: nil
+        ))
+        let ambiguousInternalError = CodexAppServerConnectionError.appServer(CodexAppServerError(
+            code: -32603,
+            message: "internal error",
+            data: nil
+        ))
+
+        XCTAssertEqual(
+            CodexAppServerSessionWebSocketClient.turnSendOutcome(for: rejectedByData),
+            .rejected(message: rejectedByData.localizedDescription)
+        )
+        XCTAssertEqual(
+            CodexAppServerSessionWebSocketClient.turnSendOutcome(for: invalidParams),
+            .rejected(message: invalidParams.localizedDescription)
+        )
+        XCTAssertEqual(
+            CodexAppServerSessionWebSocketClient.turnSendOutcome(for: ambiguousInternalError),
+            .uncertain(message: ambiguousInternalError.localizedDescription)
+        )
+        XCTAssertEqual(
+            CodexAppServerSessionWebSocketClient.turnSendOutcome(
+                for: CodexAppServerConnectionError.timeout(method: "turn/start", id: .int(7))
+            ),
+            .uncertain(message: CodexAppServerConnectionError.timeout(method: "turn/start", id: .int(7)).localizedDescription)
+        )
     }
 
     func testTurnStartBuilderUsesRemoteSafeDefaults() throws {
@@ -274,8 +316,8 @@ final class CodexAppServerProtocolTests: XCTestCase {
         let builder = CodexAppServerRequestBuilder(allowlistedProjects: [project])
 
         var planOptions = CodexAppServerTurnOptions.default
-        planOptions.model = "gpt-5-codex"
-        planOptions.reasoningEffort = .high
+        planOptions.model = "gpt-5.6-sol"
+        planOptions.reasoningEffort = .ultra
         planOptions.collaborationMode = .plan
         planOptions.planGuidanceEnabled = true
         let planPayload = CodexAppServerTurnPayload(prompt: "先做方案", options: planOptions)
@@ -284,8 +326,8 @@ final class CodexAppServerProtocolTests: XCTestCase {
         let collaborationMode = try XCTUnwrap(planParams["collaborationMode"]?.objectValue)
         XCTAssertEqual(collaborationMode["mode"]?.stringValue, "plan")
         let settings = try XCTUnwrap(collaborationMode["settings"]?.objectValue)
-        XCTAssertEqual(settings["model"]?.stringValue, "gpt-5-codex")
-        XCTAssertEqual(settings["reasoning_effort"]?.stringValue, "high")
+        XCTAssertEqual(settings["model"]?.stringValue, "gpt-5.6-sol")
+        XCTAssertEqual(settings["reasoning_effort"]?.stringValue, "ultra")
         XCTAssertEqual(settings["developer_instructions"], .null)
 
         let standardPayload = CodexAppServerTurnPayload(prompt: "直接做", options: .default)
@@ -308,6 +350,7 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(decoded.sandboxMode, .dangerFullAccess)
         XCTAssertEqual(decoded.collaborationMode, .default)
         XCTAssertFalse(decoded.planGuidanceEnabled)
+        XCTAssertEqual(decoded.modelSelectionPolicy, .catalogOnly)
     }
 
     func testTurnStartBuilderUsesDefaultCollaborationModeForGoalTurns() throws {
@@ -434,6 +477,147 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(queryItems.first(where: { $0.name == "thread_id" })?.value, "thr_claude")
     }
 
+    // 真实连接的 thread_id 是空的（一条连接承载所有线程），所以能不能接回常驻会话
+    // 全看这个 session 键。它必须存在、跨调用稳定、且落在网关的字符集白名单里。
+    func testGatewayURLCarriesStableSessionKey() throws {
+        let first = try CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8787", sessionID: "", runtimeProvider: "claude")
+        let second = try CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8787", sessionID: "", runtimeProvider: "claude")
+
+        func sessionKey(_ url: URL) throws -> String {
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            return try XCTUnwrap(items.first(where: { $0.name == "session" })?.value)
+        }
+
+        let key = try sessionKey(first)
+        XCTAssertFalse(key.isEmpty)
+        XCTAssertEqual(key, try sessionKey(second), "同一安装的会话键必须稳定，否则每次重连都是新会话")
+        XCTAssertTrue(key.hasSuffix("-claude"))
+        XCTAssertLessThanOrEqual(key.count, 128)
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+        XCTAssertNil(key.rangeOfCharacter(from: allowed.inverted), "会话键含网关会拒绝的字符：\(key)")
+
+        // 不同 runtime 各自一条常驻会话，不能互相串。
+        let codex = try CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8787", sessionID: "")
+        XCTAssertNotEqual(try sessionKey(codex), key)
+    }
+
+    func testClaudeGatewayURLCarriesClientProcessedCursor() throws {
+        let suiteName = "CodexAppServerProtocolTests.gatewayCursor.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let endpoint = "http://127.0.0.1:8787"
+        let gatewaySession = "\(CodexAppServerSessionRuntime.gatewaySessionKey(defaults: defaults))-claude"
+        CodexAppServerSessionRuntime.storeGatewayLastSeenSequence(
+            37,
+            endpoint: endpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: "claude",
+            defaults: defaults
+        )
+        CodexAppServerSessionRuntime.storeGatewayLastSeenSequence(
+            12,
+            endpoint: endpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: "claude",
+            defaults: defaults
+        )
+        let url = try CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: endpoint,
+            sessionID: "",
+            runtimeProvider: "claude",
+            defaults: defaults
+        )
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(query.first(where: { $0.name == "last_seen" })?.value, "37")
+
+        let codex = try CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8787",
+            sessionID: "",
+            runtimeProvider: "codex",
+            defaults: defaults
+        )
+        let codexQuery = URLComponents(url: codex, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertNil(codexQuery.first(where: { $0.name == "last_seen" }))
+
+        let otherEndpoint = try CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8788",
+            sessionID: "",
+            runtimeProvider: "claude",
+            defaults: defaults
+        )
+        let otherQuery = URLComponents(url: otherEndpoint, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertNil(otherQuery.first(where: { $0.name == "last_seen" }))
+    }
+
+    func testClaudeGatewayCursorResetStartsANewBridgeEpoch() async throws {
+        let suiteName = "CodexAppServerProtocolTests.gatewayCursorReset.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let endpoint = "http://127.0.0.1:8787"
+        let gatewaySession = "\(CodexAppServerSessionRuntime.gatewaySessionKey(defaults: defaults))-claude"
+        CodexAppServerSessionRuntime.storeGatewayLastSeenSequence(
+            37,
+            endpoint: endpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: "claude",
+            defaults: defaults
+        )
+        let runtime = CodexAppServerSessionRuntime(
+            endpoint: endpoint,
+            token: "test-token",
+            runtimeProvider: "claude",
+            gatewayDefaults: defaults
+        )
+
+        await runtime.handle(CodexAppServerNotification(
+            method: "_mimi/claudeReplayCursor/reset",
+            params: .object(["sequence": .int(0)])
+        ))
+        XCTAssertEqual(
+            CodexAppServerSessionRuntime.gatewayLastSeenSequence(
+                endpoint: endpoint,
+                gatewaySession: gatewaySession,
+                runtimeProvider: "claude",
+                defaults: defaults
+            ),
+            0
+        )
+
+        await runtime.acknowledgeAppliedReplayBoundary(37, epoch: 0)
+        XCTAssertEqual(
+            CodexAppServerSessionRuntime.gatewayLastSeenSequence(
+                endpoint: endpoint,
+                gatewaySession: gatewaySession,
+                runtimeProvider: "claude",
+                defaults: defaults
+            ),
+            0,
+            "上一 epoch 的迟到确认不能把刚清零的 cursor 写回来"
+        )
+        await runtime.acknowledgeAppliedReplayBoundary(5, epoch: 1)
+        CodexAppServerSessionRuntime.storeGatewayLastSeenSequence(
+            3,
+            endpoint: endpoint,
+            gatewaySession: gatewaySession,
+            runtimeProvider: "claude",
+            defaults: defaults
+        )
+        XCTAssertEqual(
+            CodexAppServerSessionRuntime.gatewayLastSeenSequence(
+                endpoint: endpoint,
+                gatewaySession: gatewaySession,
+                runtimeProvider: "claude",
+                defaults: defaults
+            ),
+            5
+        )
+    }
+
     func testRequestBuilderAllowsFullAccessSandboxWithApproval() throws {
         let project = AgentProject(id: "repo", name: "Repo", path: "/Users/me/repo")
         let builder = CodexAppServerRequestBuilder(allowlistedProjects: [project])
@@ -485,11 +669,11 @@ final class CodexAppServerProtocolTests: XCTestCase {
             ])
         ]))
 
-        XCTAssertEqual(parsed.first?.model, "gpt-5.1-codex")
+        XCTAssertEqual(parsed.first?.model, "gpt-5-codex")
         XCTAssertEqual(Set(parsed.map(\.id)), ["gpt-5.1-codex@openai", "gpt-5", "gpt-5@azure", "gpt-5-codex"])
-        XCTAssertEqual(parsed.first?.title, "GPT-5.1 Codex")
-        XCTAssertEqual(parsed.first?.provider, "openai")
-        XCTAssertEqual(parsed.first?.isDefault, true)
+        let defaultOption = try XCTUnwrap(parsed.first(where: \.isDefault))
+        XCTAssertEqual(defaultOption.title, "GPT-5.1 Codex")
+        XCTAssertEqual(defaultOption.provider, "openai")
     }
 
     func testSkillsListBuilderAndRichMetadataParser() throws {
@@ -591,7 +775,9 @@ final class CodexAppServerProtocolTests: XCTestCase {
                     "supportedReasoningEfforts": .array([
                         .object(["reasoningEffort": .string("medium"), "description": .string("Balanced")]),
                         .object(["reasoningEffort": .string("high"), "description": .string("Deep")]),
-                        .object(["reasoningEffort": .string("xhigh"), "description": .string("Deepest")])
+                        .object(["reasoningEffort": .string("xhigh"), "description": .string("Deepest")]),
+                        .object(["reasoningEffort": .string("max"), "description": .string("Maximum")]),
+                        .object(["reasoningEffort": .string("ultra"), "description": .string("Ultra")])
                     ])
                 ])
             ])
@@ -599,19 +785,18 @@ final class CodexAppServerProtocolTests: XCTestCase {
 
         let option = try XCTUnwrap(parsed.first)
         XCTAssertEqual(option.title, "GPT-5.6 Sol")
-        XCTAssertEqual(option.supportedReasoningEfforts, ["medium", "high", "xhigh"])
+        XCTAssertEqual(option.supportedReasoningEfforts, ["medium", "high", "xhigh", "max", "ultra"])
         XCTAssertEqual(option.defaultReasoningEffort, "low")
         XCTAssertFalse(option.hidden)
         XCTAssertEqual(
-            ModelReasoningGridCatalog.layout(runtimeProvider: "codex", options: parsed).rows.map(\.model),
-            ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            ModelReasoningGridCatalog.layout(runtimeProvider: "codex", options: parsed).models.map(\.model),
+            ["gpt-5.6-sol"]
         )
     }
 
-    func testClaudeModelGridUsesConcreteFamiliesAndBridgeReasoningMetadata() {
-        let efforts = ["minimal", "low", "medium", "high"]
+    func testClaudeModelGridPreservesBridgeOrderAndNativeReasoningMetadata() {
+        let efforts = ["medium", "high", "xhigh", "max"]
         let options = [
-            CodexAppServerModelOption(id: "fable", runtimeProvider: "claude"),
             CodexAppServerModelOption(
                 id: "claude-fable-5",
                 title: "Claude Fable 5",
@@ -619,54 +804,60 @@ final class CodexAppServerProtocolTests: XCTestCase {
                 supportedReasoningEfforts: efforts,
                 defaultReasoningEffort: "high"
             ),
-            CodexAppServerModelOption(id: "sonnet", runtimeProvider: "claude"),
+            CodexAppServerModelOption(
+                id: "claude-opus-5",
+                title: "Claude Opus 5",
+                runtimeProvider: "claude",
+                isDefault: true,
+                supportedReasoningEfforts: efforts,
+                defaultReasoningEffort: "high"
+            ),
             CodexAppServerModelOption(
                 id: "claude-sonnet-4-6",
                 title: "Claude Sonnet 4.6",
                 runtimeProvider: "claude",
-                isDefault: true,
-                supportedReasoningEfforts: efforts,
-                defaultReasoningEffort: "medium"
-            ),
-            CodexAppServerModelOption(id: "opus", runtimeProvider: "claude"),
-            CodexAppServerModelOption(
-                id: "claude-opus-4-7",
-                title: "Claude Opus 4.7",
-                runtimeProvider: "claude",
                 supportedReasoningEfforts: efforts,
                 defaultReasoningEffort: "high"
             ),
-            CodexAppServerModelOption(id: "haiku", runtimeProvider: "claude"),
             CodexAppServerModelOption(
                 id: "claude-haiku-4-5-20251001",
                 title: "Claude Haiku 4.5",
                 runtimeProvider: "claude",
-                supportedReasoningEfforts: efforts,
-                defaultReasoningEffort: "minimal"
+                supportedReasoningEfforts: []
             )
         ]
 
         let layout = ModelReasoningGridCatalog.layout(runtimeProvider: "claude", options: options)
 
         XCTAssertEqual(
-            layout.rows.map(\.model),
-            ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7", "claude-fable-5"]
+            layout.models.map(\.model),
+            ["claude-fable-5", "claude-opus-5", "claude-sonnet-4-6"]
         )
         XCTAssertEqual(
-            layout.rows.map { ModelReasoningGridCatalog.shortTitle(for: $0, kind: .claude) },
-            ["Haiku 4.5", "Sonnet 4.6", "Opus 4.7", "Fable 5"]
+            layout.models.map { ModelReasoningGridCatalog.shortTitle(for: $0, kind: .claude) },
+            ["Claude Fable 5", "Claude Opus 5", "Claude Sonnet 4.6"]
         )
-        XCTAssertEqual(layout.efforts, [.minimal, .low, .medium, .high])
-        XCTAssertTrue(layout.contains(modelID: "fable"), "Claude Fable alias 应映射到同一模型家族")
-        XCTAssertTrue(layout.contains(modelID: "sonnet"), "Claude alias 应映射到同一模型家族")
+        XCTAssertEqual(layout.efforts, [.medium, .high, .xhigh, .max])
+        XCTAssertEqual(layout.modelRowCount, 3)
+        XCTAssertEqual(layout.effortColumnCount, 4)
+        XCTAssertEqual(
+            layout.selection(modelRow: 0, effortColumn: 0),
+            ModelReasoningGridSelection(modelID: "claude-fable-5", effort: .medium)
+        )
+        XCTAssertEqual(
+            layout.selection(modelRow: 2, effortColumn: 3),
+            ModelReasoningGridSelection(modelID: "claude-sonnet-4-6", effort: .max)
+        )
+        XCTAssertFalse(layout.contains(modelID: "fable"), "未返回的 alias 不应再被本地映射成具体模型")
+        XCTAssertFalse(layout.contains(modelID: "claude-haiku-4-5-20251001"), "网格只展示运行时返回的前三个模型")
         XCTAssertFalse(layout.showsFastMode)
         XCTAssertEqual(
-            ModelReasoningGridCatalog.triggerTitle(for: "fable", effort: .high, layout: layout),
-            "Fable 5 · \(ModelReasoningGridCatalog.effortTitle(.high))"
+            ModelReasoningGridCatalog.triggerTitle(for: "claude-fable-5", effort: .max, layout: layout),
+            "Claude Fable 5 · Max"
         )
         XCTAssertEqual(
-            ModelReasoningGridCatalog.triggerTitle(for: "sonnet", effort: .medium, layout: layout),
-            "Sonnet 4.6 · \(ModelReasoningGridCatalog.effortTitle(.medium))"
+            ModelReasoningGridCatalog.triggerTitle(for: "claude-sonnet-4-6", effort: .high, layout: layout),
+            "Claude Sonnet 4.6 · High"
         )
     }
 
@@ -674,41 +865,222 @@ final class CodexAppServerProtocolTests: XCTestCase {
         let sonnet = CodexAppServerModelOption(
             id: "claude-sonnet-4-6",
             runtimeProvider: "claude",
-            supportedReasoningEfforts: ["low", "medium"]
+            supportedReasoningEfforts: ["medium", "high"]
         )
         let opus = CodexAppServerModelOption(
-            id: "claude-opus-4-7",
+            id: "claude-opus-5",
             runtimeProvider: "claude",
-            supportedReasoningEfforts: ["high"],
-            defaultReasoningEffort: "high"
+            supportedReasoningEfforts: ["xhigh", "max"],
+            defaultReasoningEffort: "xhigh"
         )
         let layout = ModelReasoningGridCatalog.layout(runtimeProvider: "claude", options: [sonnet, opus])
 
-        XCTAssertEqual(layout.efforts, [.low, .medium, .high])
-        XCTAssertFalse(ModelReasoningGridCatalog.supports(.high, option: sonnet, layout: layout))
-        XCTAssertTrue(ModelReasoningGridCatalog.supports(.high, option: opus, layout: layout))
-        XCTAssertNil(
-            ModelReasoningGridCatalog.reasoningEffortForModelSelection(
-                option: sonnet,
-                current: .high,
-                layout: layout
-            )
-        )
+        XCTAssertEqual(layout.efforts, [.medium, .high, .xhigh, .max])
+        XCTAssertFalse(ModelReasoningGridCatalog.isStandardEffortAvailable(.xhigh, option: sonnet, layout: layout))
+        XCTAssertTrue(ModelReasoningGridCatalog.isStandardEffortAvailable(.xhigh, option: opus, layout: layout))
         XCTAssertEqual(
-            ModelReasoningGridCatalog.reasoningEffortForModelSelection(
-                option: opus,
-                current: .low,
+            ModelReasoningGridCatalog.normalizedVisibleEffort(
+                option: sonnet,
+                current: .xhigh,
                 layout: layout
             ),
-            .high
+            .medium
         )
         XCTAssertEqual(
-            ModelReasoningGridCatalog.supportedEfforts(for: sonnet, layout: layout),
-            [.low, .medium]
+            ModelReasoningGridCatalog.normalizedVisibleEffort(
+                option: opus,
+                current: .medium,
+                layout: layout
+            ),
+            .xhigh
         )
         XCTAssertEqual(
-            ModelReasoningGridCatalog.supportedEfforts(for: opus, layout: layout),
-            [.high]
+            ModelReasoningGridCatalog.visibleEfforts(for: sonnet, layout: layout),
+            [.medium, .high]
+        )
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.visibleEfforts(for: opus, layout: layout),
+            [.xhigh, .max]
+        )
+    }
+
+    func testCodexStandardMenuKeepsFullCapabilitiesButHidesLowAndMax() {
+        let options = CodexAppServerModelOption.builtInFallback
+        let sol = options[0]
+        let terra = options[1]
+        let luna = options[2]
+        let layout = ModelReasoningGridCatalog.layout(runtimeProvider: "codex", options: options)
+
+        XCTAssertEqual(layout.efforts, [.medium, .high, .xhigh, .ultra])
+        XCTAssertEqual(layout.modelRowCount, 3)
+        XCTAssertEqual(layout.effortColumnCount, 4)
+        XCTAssertEqual(
+            layout.selection(modelRow: 2, effortColumn: 3),
+            ModelReasoningGridSelection(modelID: luna.model, effort: .ultra)
+        )
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.allSupportedEfforts(for: sol),
+            [.low, .medium, .high, .xhigh, .max, .ultra]
+        )
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.allSupportedEfforts(for: terra),
+            [.low, .medium, .high, .xhigh, .max, .ultra]
+        )
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.allSupportedEfforts(for: luna),
+            [.low, .medium, .high, .xhigh, .max]
+        )
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.visibleEfforts(for: sol, layout: layout),
+            [.medium, .high, .xhigh, .ultra]
+        )
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.visibleEfforts(for: terra, layout: layout),
+            [.medium, .high, .xhigh, .ultra]
+        )
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.visibleEfforts(for: luna, layout: layout),
+            [.medium, .high, .xhigh]
+        )
+        XCTAssertEqual(sol.defaultReasoningEffort, "low")
+        XCTAssertEqual(terra.defaultReasoningEffort, "medium")
+        XCTAssertEqual(luna.defaultReasoningEffort, "medium")
+        XCTAssertTrue(ModelReasoningGridCatalog.supports(.ultra, option: sol))
+        XCTAssertFalse(ModelReasoningGridCatalog.supports(.ultra, option: luna))
+        XCTAssertFalse(ModelReasoningGridCatalog.isStandardEffortAvailable(.max, option: sol, layout: layout))
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.normalizedVisibleEffort(
+                option: luna,
+                current: .ultra,
+                layout: layout
+            ),
+            .medium
+        )
+        XCTAssertEqual(ModelReasoningGridCatalog.effortTitle(.max), "Max")
+        XCTAssertEqual(ModelReasoningGridCatalog.effortTitle(.ultra), "Ultra")
+    }
+
+    func testEmptyReasoningMetadataUsesProviderSpecificFallback() {
+        let codex = CodexAppServerModelOption(
+            id: "legacy-codex",
+            runtimeProvider: "codex",
+            supportedReasoningEfforts: []
+        )
+        let claude = CodexAppServerModelOption(
+            id: "claude-haiku",
+            supportedReasoningEfforts: []
+        )
+        let codexLayout = ModelReasoningGridCatalog.layout(runtimeProvider: "codex", options: [codex])
+        let claudeLayout = ModelReasoningGridCatalog.layout(runtimeProvider: "claude", options: [claude])
+
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.visibleEfforts(for: codex, layout: codexLayout),
+            [.medium, .high, .xhigh, .ultra]
+        )
+        XCTAssertTrue(ModelReasoningGridCatalog.visibleEfforts(for: claude, layout: claudeLayout).isEmpty)
+        XCTAssertNil(
+            ModelReasoningGridCatalog.normalizedVisibleEffort(
+                option: claude,
+                current: .max,
+                layout: claudeLayout
+            )
+        )
+    }
+
+    func testAllModelsSelectionUpdatesModelAndEffortTogether() {
+        let codex = CodexAppServerModelOption(
+            id: "gpt-5.6-sol",
+            title: "GPT-5.6 Sol",
+            provider: "openai",
+            runtimeProvider: "codex",
+            supportedReasoningEfforts: ["medium", "high", "xhigh", "ultra"]
+        )
+        var options = CodexAppServerTurnOptions.default
+
+        ModelReasoningGridCatalog.applySelection(
+            option: codex,
+            effort: .ultra,
+            preservesServerDefault: false,
+            fallbackRuntimeProvider: nil,
+            to: &options
+        )
+
+        XCTAssertEqual(options.model, "gpt-5.6-sol")
+        XCTAssertEqual(options.modelProvider, "openai")
+        XCTAssertEqual(options.reasoningEffort, .ultra)
+
+        ModelReasoningGridCatalog.applySelection(
+            option: codex,
+            effort: .high,
+            preservesServerDefault: true,
+            fallbackRuntimeProvider: nil,
+            to: &options
+        )
+
+        XCTAssertNil(options.model)
+        XCTAssertNil(options.modelProvider)
+        XCTAssertEqual(options.reasoningEffort, .high)
+    }
+
+    func testNoNativeEffortModelClearsEffortAndClaudeServiceTier() {
+        let haiku = CodexAppServerModelOption(
+            id: "haiku",
+            provider: "anthropic",
+            runtimeProvider: "claude",
+            supportedReasoningEfforts: []
+        )
+        var options = CodexAppServerTurnOptions.default
+        options.serviceTier = "priority"
+
+        ModelReasoningGridCatalog.applySelection(
+            option: haiku,
+            effort: nil,
+            preservesServerDefault: false,
+            fallbackRuntimeProvider: nil,
+            to: &options
+        )
+
+        XCTAssertEqual(options.model, "haiku")
+        XCTAssertNil(options.reasoningEffort)
+        XCTAssertNil(options.serviceTier)
+    }
+
+    func testLeavingDeveloperMaxFallsBackToStandardCodexEffort() {
+        let sol = CodexAppServerModelOption.builtInFallback[0]
+        let layout = ModelReasoningGridCatalog.layout(runtimeProvider: "codex", options: [sol])
+
+        XCTAssertTrue(ModelReasoningGridCatalog.supports(.max, option: sol))
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.normalizedVisibleEffort(
+                option: sol,
+                current: .max,
+                layout: layout
+            ),
+            .medium
+        )
+    }
+
+    func testFastModeIsTheOnlyStandardServiceTierEntry() {
+        XCTAssertEqual(ModelReasoningGridCatalog.serviceTierForFastMode(true), "priority")
+        XCTAssertNil(ModelReasoningGridCatalog.serviceTierForFastMode(false))
+        XCTAssertEqual(
+            ModelReasoningGridCatalog.normalizedStandardServiceTier(
+                "priority",
+                runtimeProvider: "codex"
+            ),
+            "priority"
+        )
+        XCTAssertNil(
+            ModelReasoningGridCatalog.normalizedStandardServiceTier(
+                "auto",
+                runtimeProvider: "codex"
+            )
+        )
+        XCTAssertNil(
+            ModelReasoningGridCatalog.normalizedStandardServiceTier(
+                "priority",
+                runtimeProvider: "claude"
+            )
         )
     }
 
@@ -745,10 +1117,10 @@ final class CodexAppServerProtocolTests: XCTestCase {
             ])
         ]))
 
-        XCTAssertEqual(parsed.first?.model, "gpt-snake-default")
-        XCTAssertEqual(parsed.first?.title, "Snake Default")
-        XCTAssertEqual(parsed.first?.provider, "openai")
-        XCTAssertEqual(parsed.first?.isDefault, true)
+        let defaultOption = try XCTUnwrap(parsed.first(where: \.isDefault))
+        XCTAssertEqual(defaultOption.model, "gpt-snake-default")
+        XCTAssertEqual(defaultOption.title, "Snake Default")
+        XCTAssertEqual(defaultOption.provider, "openai")
         XCTAssertEqual(Set(parsed.map(\.model)), ["gpt-snake-default", "gpt-side"])
     }
 

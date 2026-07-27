@@ -206,12 +206,7 @@ pub async fn handle_thread_resume(
 
     let mut thread = thread_from_entry(&entry);
     if !params.exclude_turns {
-        let live = state.thread_log(&params.thread_id);
-        thread.turns = if !live.is_empty() {
-            live
-        } else {
-            transcript_turns(state, &entry.metadata.claude_session_path).await?
-        };
+        thread.turns = cached_thread_turns(state, &entry).await?;
     }
 
     let response_model = match model {
@@ -670,18 +665,7 @@ pub async fn handle_thread_read(
         .ok_or_else(|| ThreadError::NotFound(params.thread_id.clone()))?;
     let mut thread = thread_from_entry(&entry);
     if params.include_turns {
-        // Prefer the in-memory log (canonical, captured live from the event
-        // pump) over the on-disk JSONL parse — claude's process flushes
-        // its session file with a small lag, so a fast `thread/read` after
-        // `turn/completed` can otherwise miss the just-completed assistant
-        // message. The JSONL parse remains the cold-start fallback for
-        // threads the bridge hasn't observed on this connection.
-        let live = state.thread_log(&params.thread_id);
-        thread.turns = if !live.is_empty() {
-            live
-        } else {
-            transcript_turns(state, &entry.metadata.claude_session_path).await?
-        };
+        thread.turns = cached_thread_turns(state, &entry).await?;
     }
     Ok(p::ThreadReadResponse { thread })
 }
@@ -702,12 +686,7 @@ pub async fn handle_thread_turns_list(
         .lookup(&params.thread_id)
         .await
         .ok_or_else(|| ThreadError::NotFound(params.thread_id.clone()))?;
-    let live = state.thread_log(&params.thread_id);
-    let mut turns = if !live.is_empty() {
-        live
-    } else {
-        transcript_turns(state, &entry.metadata.claude_session_path).await?
-    };
+    let mut turns = cached_thread_turns(state, &entry).await?;
     if matches!(
         params.sort_direction.unwrap_or(p::SortDirection::Desc),
         p::SortDirection::Desc
@@ -790,6 +769,42 @@ async fn transcript_turns(
         return Ok(messages_text_to_turns(&text));
     }
     messages_to_turns(path).await.map_err(ThreadError::from)
+}
+
+/// Claude JSONL 是跨 App/bridge 重启的权威历史，内存日志负责补上当前进程
+/// 尚未 flush 的实时事件。每次 read/resume/turns-list 都尝试对账；磁盘已
+/// 落下的成功 terminal 可以修复 live cache 漏项，但不能覆盖运行中或失败状态。
+pub(super) async fn cached_thread_turns(
+    state: &Arc<ConnectionState>,
+    entry: &IndexEntry,
+) -> Result<Vec<p::Turn>, ThreadError> {
+    let live = state.thread_log(&entry.thread_id);
+    let persisted = match transcript_turns(state, &entry.metadata.claude_session_path).await {
+        Ok(turns) => turns,
+        Err(err) if !live.is_empty() => {
+            tracing::warn!(
+                thread_id = %entry.thread_id,
+                live_turns = live.len(),
+                error = %err,
+                "claude transcript reconciliation failed; serving live cache"
+            );
+            return Ok(live);
+        }
+        Err(err) => return Err(err),
+    };
+    let report = state.reconcile_thread_log(&entry.thread_id, persisted);
+    if report.seeded_turns > 0 || report.repaired_turns > 0 || report.protected_turns > 0 {
+        tracing::info!(
+            thread_id = %entry.thread_id,
+            live_turns = report.live_turns,
+            persisted_turns = report.persisted_turns,
+            seeded_turns = report.seeded_turns,
+            repaired_turns = report.repaired_turns,
+            protected_turns = report.protected_turns,
+            "reconciled claude transcript with live thread cache"
+        );
+    }
+    Ok(state.thread_log(&entry.thread_id))
 }
 
 async fn transcript_user_message_ids(
@@ -936,6 +951,8 @@ fn parse_effort(value: &serde_json::Value) -> Option<p::ReasoningEffort> {
         "low" => Some(p::ReasoningEffort::Low),
         "medium" => Some(p::ReasoningEffort::Medium),
         "high" => Some(p::ReasoningEffort::High),
+        "xhigh" => Some(p::ReasoningEffort::XHigh),
+        "max" => Some(p::ReasoningEffort::Max),
         _ => None,
     }
 }
@@ -1035,10 +1052,13 @@ mod tests {
             Some(p::ReasoningEffort::Minimal)
         ));
         assert!(matches!(
-            parse_effort(&json!("high")),
-            Some(p::ReasoningEffort::High)
+            parse_effort(&json!("xhigh")),
+            Some(p::ReasoningEffort::XHigh)
         ));
-        assert!(parse_effort(&json!("xhigh")).is_none());
+        assert!(matches!(
+            parse_effort(&json!("max")),
+            Some(p::ReasoningEffort::Max)
+        ));
         assert!(parse_effort(&json!(42)).is_none());
     }
 

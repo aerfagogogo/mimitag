@@ -1,5 +1,134 @@
 import SwiftUI
 
+struct ConversationWorkGroupRow<Content: View>: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+
+    let group: ConversationWorkGroup
+    let layout: ConversationLayout
+    let isExpanded: Bool
+    let toggleGroup: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                Button(action: toggleGroup) {
+                    header
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(group.title())
+                .accessibilityValue(accessibilityValue)
+                .accessibilityHint(
+                    isExpanded
+                        ? L10n.text("ui.collapse_this_stage_of_activities")
+                        : L10n.text("ui.expand_this_stage_of_activities")
+                )
+
+                if isExpanded {
+                    HStack(alignment: .top, spacing: 0) {
+                        Rectangle()
+                            .fill(tokens.border.opacity(0.9))
+                            .frame(width: 2)
+                            .padding(.leading, 6)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            content()
+                        }
+                        .padding(.leading, 18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .transition(groupTransition)
+                }
+            }
+            .frame(maxWidth: layout.assistantBubbleMaxWidth, alignment: .leading)
+
+            Spacer(minLength: layout.messageSideSpacer)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 8) {
+            statusMarker
+
+            Group {
+                if group.status == .running {
+                    // 只让运行中的标题按秒刷新；终态行保持静态，避免历史 List 无意义重绘。
+                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(group.title(at: context.date))
+                    }
+                } else {
+                    Text(group.title())
+                }
+            }
+            .font(themeStore.uiFont(size: 14, weight: .medium))
+            .foregroundStyle(headerTint)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "chevron.right")
+                .font(themeStore.uiFont(.caption2, weight: .semibold))
+                .foregroundStyle(tokens.secondaryText.opacity(0.76))
+                .frame(width: 18, height: 18)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+        }
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var statusMarker: some View {
+        switch group.status {
+        case .running:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(tokens.accent)
+                .frame(width: 14, height: 18)
+        case .completed:
+            Image(systemName: "square.stack.3d.up.fill")
+                .font(themeStore.uiFont(size: 11, weight: .semibold))
+                .foregroundStyle(tokens.secondaryText)
+                .frame(width: 14, height: 18)
+        case .interrupted:
+            Image(systemName: "stop.circle.fill")
+                .font(themeStore.uiFont(size: 11, weight: .semibold))
+                .foregroundStyle(tokens.secondaryText)
+                .frame(width: 14, height: 18)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(themeStore.uiFont(size: 11, weight: .semibold))
+                .foregroundStyle(Color.red)
+                .frame(width: 14, height: 18)
+        }
+    }
+
+    private var groupTransition: AnyTransition {
+        accessibilityReduceMotion
+            ? .opacity
+            : .opacity.combined(with: .move(edge: .top))
+    }
+
+    private var accessibilityValue: String {
+        let state = isExpanded ? L10n.text("ui.expanded") : L10n.text("ui.collected")
+        return L10n.format(
+            "ui.value_contains_value",
+            state,
+            L10n.plural("ui.activities_count", count: group.activityCount)
+        )
+    }
+
+    private var headerTint: Color {
+        group.status == .failed ? .red : tokens.secondaryText
+    }
+
+    private var tokens: ThemeTokens {
+        themeStore.tokens(for: colorScheme)
+    }
+}
+
 struct ConversationProcessGroupRow: View, Equatable {
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
@@ -65,12 +194,11 @@ struct ConversationProcessGroupRow: View, Equatable {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
             statusMarker
 
             Text(summaryText)
-                .font(themeStore.uiFont(.caption, weight: .medium))
-                .italic()
+                .font(themeStore.uiFont(size: 14, weight: .medium))
                 .foregroundStyle(headerTint)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -92,7 +220,7 @@ struct ConversationProcessGroupRow: View, Equatable {
         case .running:
             ProgressView()
                 .controlSize(.mini)
-                .tint(tokens.secondaryText)
+                .tint(tokens.accent)
                 .frame(width: 14, height: 18)
         case .completed:
             Image(systemName: "circle.fill")

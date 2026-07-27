@@ -2,16 +2,15 @@ import Foundation
 
 // 启动恢复、项目选择与 Worktree 生命周期从稳定外观 API 中拆出。
 extension SessionStore {
-    @discardableResult
-    func bootstrap(restoring snapshot: SessionRestoreSnapshot? = nil) async -> Bool {
+    func bootstrap() async {
 #if DEBUG
         if appStore.shouldSeedDebugWorkbenchUI {
             applyDebugWorkbenchUISeedIfNeeded()
-            return snapshot == nil
+            return
         }
 #endif
         guard appStore.isConfigured else {
-            return snapshot == nil
+            return
         }
         // 冷启动有两层“没就绪”：① VPN / Tailscale 隧道还没建好，首个 HTTP 请求就失败；
         // ② agentd 的 HTTP 端口先于 app-server gateway 上游就绪——projects 能立刻拿到，但首个
@@ -20,18 +19,14 @@ extension SessionStore {
         // 真正加载完成。否则只要 projects 一到手就收手，首屏会停在“有项目、无会话、点什么都
         // 连不上”的半成品状态，只能靠用户杀进程重开才恢复。
         await refreshUntilLoaded(maxWait: 45, autoAttach: true)
-        if let snapshot {
-            return await restoreSessionIfPossible(snapshot)
-        }
-        return true
     }
 
-    @discardableResult
-    func restoreSessionIfPossible(_ snapshot: SessionRestoreSnapshot) async -> Bool {
+    /// 只解析并合并恢复候选，不改变前台选择。是否接受候选由 Root 的 route revision 决定。
+    func resolveSessionForRestore(_ snapshot: SessionRestoreSnapshot) async -> AgentSession? {
         guard AgentAPIClient.normalizedEndpoint(snapshot.endpoint) == AgentAPIClient.normalizedEndpoint(appStore.endpoint),
               !snapshot.session.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let workspace = ensureWorkspaceForKnownProjectID(snapshot.session.projectID)
-        else { return false }
+        else { return nil }
 
         // 先让 runtime 从真实 thread/list 建立 session→provider 路由；旧会话不在首屏时再使用本地轻量快照。
         do {
@@ -43,10 +38,20 @@ extension SessionStore {
         }
 
         let restored = sessionsByID[snapshot.session.id] ?? session(snapshot.session, in: workspace)
-        guard restored.projectID == workspace.id else { return false }
+        guard restored.projectID == workspace.id else { return nil }
         mergeSessionPage([restored])
-        await selectSession(restored)
-        return selectedSessionID == restored.id
+        return restored
+    }
+
+    /// 保留给现有调用和测试的兼容入口；App 冷启动使用 Root 的两阶段恢复，不走此便捷方法。
+    @discardableResult
+    func bootstrap(restoring snapshot: SessionRestoreSnapshot?) async -> Bool {
+        await bootstrap()
+        guard let snapshot,
+              let restored = await resolveSessionForRestore(snapshot) else {
+            return snapshot == nil
+        }
+        return await selectSession(restored, reason: .restoration)
     }
 
 #if DEBUG
@@ -145,8 +150,11 @@ extension SessionStore {
         sessionWorkspaceIDs = nil
         setExpandedProjectIDs([mimiDemo.id])
         replaceSessionsIfChanged(with: sessions, projectID: nil)
-        setSelectedProjectID(mimiDemo.id)
-        setSelectedSessionID(appStore.shouldSeedDebugQueuedTurnsUI ? runningSessionID : selectedSessionID)
+        _ = commitSelection(
+            projectID: mimiDemo.id,
+            sessionID: appStore.shouldSeedDebugQueuedTurnsUI ? runningSessionID : selectedSessionID,
+            reason: .userOpen
+        )
         if appStore.shouldSeedDebugQueuedTurnsUI {
             // 队列样例需要处于可控的运行中会话，才能同时验收“排队（默认）/引导”切换；
             // 普通 Debug 工作台仍保留原来的观察态样例，不改变其接管流程覆盖。
@@ -335,22 +343,23 @@ extension SessionStore {
         isLoading = true
         defer { isLoading = false }
         let connectionGeneration = appStore.connectionGeneration
+        let requestedSelectionLease = currentSelectionLease()
+        let requestedProjectID = requestedSelectionLease.projectID
+        var foregroundLease = requestedSelectionLease
         var requestToken: Int?
         var requestProjectID: String?
         var activeWorkspace: AgentWorkspace?
         do {
             let client = try clientFactory()
-            let previousProjectID = selectedProjectID
-            let previousSessionID = selectedSessionID
             let fetchedProjects = try await client.projects()
             guard connectionGeneration == appStore.connectionGeneration else {
                 return
             }
             setProjectsIfChanged(fetchedProjects)
             reloadRecentWorkspaces()
-            if let previousProjectID,
-               sidebarProjectsByID[previousProjectID] == nil,
-               let project = projectsByID[previousProjectID] {
+            if let requestedProjectID,
+               sidebarProjectsByID[requestedProjectID] == nil,
+               let project = projectsByID[requestedProjectID] {
                 _ = ensureWorkspace(for: project)
             }
             let validProjectIDs = Self.projectIDs(sidebarProjects)
@@ -362,16 +371,38 @@ extension SessionStore {
             sessionPageRequestTokenByProjectID = sessionPageRequestTokenByProjectID.filter { validProjectIDs.contains($0.key) }
             sessionPageLoadingTokenByProjectID = sessionPageLoadingTokenByProjectID.filter { validProjectIDs.contains($0.key) }
             rebuildProjectSessionListSnapshots()
-            let projectID = previousProjectID.flatMap { id in
+            let projectID = requestedProjectID.flatMap { id in
                 sidebarProjectsByID[id] == nil ? nil : id
             } ?? (autoAttach ? sidebarProjects.first?.id : nil)
-            setSelectedProjectID(projectID)
+            if isSelectionLeaseCurrent(requestedSelectionLease),
+               selectedProjectID != projectID {
+                // 启动时可以补齐默认工作区，但只能在用户尚未产生新导航时提交。
+                if selectedSessionID != nil {
+                    foregroundLease = commitSelection(
+                        projectID: projectID,
+                        sessionID: nil,
+                        reason: .invalidation,
+                        ifCurrent: requestedSelectionLease
+                    ) ?? foregroundLease
+                } else {
+                    setSelectedProjectID(projectID)
+                    foregroundLease = currentSelectionLease()
+                }
+            }
             guard let projectID else {
-                replaceSessionsIfChanged(with: [], projectID: nil)
-                setSelectedSessionID(nil)
-                disconnectWebSocket()
-                setStatusMessage(sidebarProjects.isEmpty ? L10n.text("ui.no_workspace_has_been_opened_yet") : L10n.plural("ui.recent_workspaces_loaded_count", count: sidebarProjects.count))
-                setErrorMessage(nil)
+                if isSelectionLeaseCurrent(foregroundLease) {
+                    if selectedSessionID != nil {
+                        _ = commitSelection(
+                            projectID: nil,
+                            sessionID: nil,
+                            reason: .invalidation,
+                            ifCurrent: foregroundLease
+                        )
+                    }
+                    disconnectWebSocket()
+                    setStatusMessage(sidebarProjects.isEmpty ? L10n.text("ui.no_workspace_has_been_opened_yet") : L10n.plural("ui.recent_workspaces_loaded_count", count: sidebarProjects.count))
+                    setErrorMessage(nil)
+                }
                 await reconcilePersistedQueuedTurns()
                 return
             }
@@ -380,10 +411,16 @@ extension SessionStore {
             requestToken = beginSessionPageRequest(projectID: projectID)
             defer { finishSessionPageRequest(projectID: projectID, token: requestToken ?? 0) }
             guard let workspace = workspacesByID[projectID] else {
-                setSelectedProjectID(nil)
-                setSelectedSessionID(nil)
-                setStatusMessage(L10n.text("ui.the_workspace_has_expired_please_reopen_it"))
-                setErrorMessage(nil)
+                if isSelectionLeaseCurrent(foregroundLease) {
+                    _ = commitSelection(
+                        projectID: nil,
+                        sessionID: nil,
+                        reason: .invalidation,
+                        ifCurrent: foregroundLease
+                    )
+                    setStatusMessage(L10n.text("ui.the_workspace_has_expired_please_reopen_it"))
+                    setErrorMessage(nil)
+                }
                 return
             }
             activeWorkspace = workspace
@@ -407,25 +444,28 @@ extension SessionStore {
             updateSessionPageState(projectID: projectID, page: page)
             clearWorkspaceUnavailable(projectID)
 
-            if let previousSessionID, let session = sessionsByID[previousSessionID] {
-                // 刷新或重新保存设置不能抢走用户已经点选的历史会话。
-                setSelectedProjectID(session.projectID)
-                setSelectedSessionID(session.id)
+            if isSelectionLeaseCurrent(foregroundLease),
+               let selectedSessionID = foregroundLease.sessionID,
+               let session = sessionsByID[selectedSessionID],
+               session.projectID == foregroundLease.projectID {
                 revealProjectInSidebar(session.projectID)
-                await prepareSelectedSessionAfterRefresh(session, autoAttach: autoAttach)
-            } else {
-                // 刷新只更新索引与后台队列监控；没有显式详情选择时，运行中会话不能抢占导航。
-                setSelectedSessionID(nil)
+                await prepareSelectedSessionAfterRefresh(
+                    session,
+                    autoAttach: autoAttach,
+                    selectionLease: foregroundLease
+                )
             }
 
             await reconcilePersistedQueuedTurns()
             ensureAllQueuedSessionMonitoring()
-            setStatusMessage(L10n.format(
-                "ui.counts_joined",
-                L10n.plural("ui.recent_workspaces_loaded_count", count: sidebarProjects.count),
-                L10n.plural("ui.sessions_loaded_count", count: filteredSessions.count)
-            ))
-            setErrorMessage(nil)
+            if isSelectionLeaseCurrent(foregroundLease) {
+                setStatusMessage(L10n.format(
+                    "ui.counts_joined",
+                    L10n.plural("ui.recent_workspaces_loaded_count", count: sidebarProjects.count),
+                    L10n.plural("ui.sessions_loaded_count", count: filteredSessions.count)
+                ))
+                setErrorMessage(nil)
+            }
         } catch {
             if let requestProjectID, let requestToken, !isCurrentSessionPageRequest(projectID: requestProjectID, token: requestToken) {
                 return
@@ -436,8 +476,12 @@ extension SessionStore {
             if let activeWorkspace {
                 // 已经拿到 projects、只是这个工作区的会话加载失败：单独判定该工作区可用性，
                 // 避免把“某个 recent 失效”冒泡成整页错误，也避免冷启动退避一直重试一个已删除目录。
-                await handleWorkspaceLoadFailure(workspace: activeWorkspace, error: error)
-            } else {
+                await handleWorkspaceLoadFailure(
+                    workspace: activeWorkspace,
+                    error: error,
+                    reportForeground: isSelectionLeaseCurrent(foregroundLease)
+                )
+            } else if isSelectionLeaseCurrent(foregroundLease) {
                 setErrorMessage(error.localizedDescription)
             }
         }
@@ -445,8 +489,11 @@ extension SessionStore {
 
     func selectProject(_ project: AgentProject) async {
         let workspace = ensureWorkspace(for: project)
-        setSelectedProjectID(workspace.id)
-        setSelectedSessionID(nil)
+        let selectionLease = commitSelection(
+            projectID: workspace.id,
+            sessionID: nil,
+            reason: .invalidation
+        )
         insertExpandedProjectID(workspace.id)
         setErrorMessage(nil)
 #if DEBUG
@@ -456,7 +503,11 @@ extension SessionStore {
         }
 #endif
         disconnectWebSocket()
-        await refreshSessions(forProjectID: workspace.id)
+        await refreshSessions(
+            forProjectID: workspace.id,
+            activatesProject: false,
+            foregroundLease: selectionLease
+        )
     }
 
     /// 只刷新工作区目录，不改变当前会话选择，也不重建 WebSocket。
@@ -506,7 +557,9 @@ extension SessionStore {
             let page = try await sessionListFirstPage(
                 workspace: workspace,
                 limit: Self.initialSessionPageLimit,
-                reuseRecent: false
+                reuseRecent: false,
+                // 用户明确点刷新时绕过可能滞后的 State DB 索引；后台轮询仍保留快速路径。
+                consistency: .authoritative
             )
             guard isCurrentSessionPageRequest(projectID: workspace.id, token: requestToken) else {
                 return
@@ -537,21 +590,34 @@ extension SessionStore {
             setErrorMessage(L10n.text("ui.please_enter_the_directory_path_in_the_development"))
             return false
         }
+        let openIntent = reserveSelectionIntent()
         do {
             // 走 clientFactory（与会话请求同一个注入点）而不是 appStore.client()，
             // 让 resolve 和后续会话加载共用一条可测试链路。
             let workspace = try await clientFactory().resolveWorkspace(path: trimmed)
             rememberWorkspace(workspace)
             clearWorkspaceUnavailable(workspace.id)
-            setSelectedProjectID(workspace.id)
-            setSelectedSessionID(nil)
             insertExpandedProjectID(workspace.id)
-            setErrorMessage(nil)
-            disconnectWebSocket()
-            await refreshSessions(forProjectID: workspace.id)
+            let selectionLease = commitSelection(
+                projectID: workspace.id,
+                sessionID: nil,
+                reason: .invalidation,
+                ifCurrent: openIntent
+            )
+            if selectionLease != nil {
+                setErrorMessage(nil)
+                disconnectWebSocket()
+            }
+            await refreshSessions(
+                forProjectID: workspace.id,
+                activatesProject: false,
+                foregroundLease: selectionLease
+            )
             return true
         } catch {
-            setErrorMessage(error.localizedDescription)
+            if isSelectionLeaseCurrent(openIntent) {
+                setErrorMessage(error.localizedDescription)
+            }
             return false
         }
     }
@@ -563,6 +629,7 @@ extension SessionStore {
 
     @discardableResult
     func createWorktreeAndOpen(project: AgentProject, name: String? = nil, base: String? = nil, branch: String? = nil) async -> Bool {
+        let openIntent = reserveSelectionIntent()
         isCreatingWorktree = true
         defer { isCreatingWorktree = false }
         do {
@@ -577,15 +644,27 @@ extension SessionStore {
             rememberWorkspace(workspace)
             upsertManagedWorktree(WorktreeListItem(workspace: workspace, worktree: response.worktree))
             clearWorkspaceUnavailable(workspace.id)
-            setSelectedProjectID(workspace.id)
-            setSelectedSessionID(nil)
             insertExpandedProjectID(workspace.id)
-            setErrorMessage(nil)
-            disconnectWebSocket()
-            await refreshSessions(forProjectID: workspace.id)
+            let selectionLease = commitSelection(
+                projectID: workspace.id,
+                sessionID: nil,
+                reason: .invalidation,
+                ifCurrent: openIntent
+            )
+            if selectionLease != nil {
+                setErrorMessage(nil)
+                disconnectWebSocket()
+            }
+            await refreshSessions(
+                forProjectID: workspace.id,
+                activatesProject: false,
+                foregroundLease: selectionLease
+            )
             return true
         } catch {
-            setErrorMessage(error.localizedDescription)
+            if isSelectionLeaseCurrent(openIntent) {
+                setErrorMessage(error.localizedDescription)
+            }
             return false
         }
     }
@@ -602,6 +681,7 @@ extension SessionStore {
             return false
         }
 
+        let handoffIntent = reserveSelectionIntent()
         isCreatingWorktree = true
         defer { isCreatingWorktree = false }
         do {
@@ -617,33 +697,56 @@ extension SessionStore {
             rememberWorkspace(workspace)
             upsertManagedWorktree(WorktreeListItem(workspace: workspace, worktree: response.worktree))
             clearWorkspaceUnavailable(workspace.id)
-            setSelectedProjectID(workspace.id)
-            setSelectedSessionID(nil)
             insertExpandedProjectID(workspace.id)
-            setErrorMessage(nil)
-            worktreeErrorMessage = nil
-            disconnectWebSocket()
-            await refreshSessions(forProjectID: workspace.id)
+            let workspaceSelectionLease = commitSelection(
+                projectID: workspace.id,
+                sessionID: nil,
+                reason: .invalidation,
+                ifCurrent: handoffIntent
+            )
+            if workspaceSelectionLease != nil {
+                setErrorMessage(nil)
+                worktreeErrorMessage = nil
+                disconnectWebSocket()
+            }
+            await refreshSessions(
+                forProjectID: workspace.id,
+                activatesProject: false,
+                foregroundLease: workspaceSelectionLease
+            )
 
             let sourceThreadID = normalizedOptional(session.resumeID) ?? session.id
             do {
                 let forked = try await clientFactory().forkSession(threadID: sourceThreadID, workspace: workspace)
                 let responseSession = self.session(forked, in: workspace)
                 upsert(responseSession)
-                setSelectedProjectID(responseSession.projectID)
-                setSelectedSessionID(responseSession.id)
                 insertExpandedProjectID(responseSession.projectID)
-                await loadHistoryIfNeeded(for: responseSession)
-                if responseSession.isRunning {
-                    connectWebSocket(responseSession)
-                } else {
-                    disconnectWebSocket()
+                let responseSelectionLease = workspaceSelectionLease.flatMap {
+                    commitSelection(
+                        projectID: responseSession.projectID,
+                        sessionID: responseSession.id,
+                        reason: .userOpen,
+                        ifCurrent: $0
+                    )
+                }
+                if let responseSelectionLease {
+                    await loadHistoryIfNeeded(for: responseSession)
+                    if isSelectionLeaseCurrent(responseSelectionLease) {
+                        if responseSession.isRunning {
+                            connectWebSocket(responseSession)
+                        } else {
+                            disconnectWebSocket()
+                        }
+                        setStatusMessage(L10n.text("ui.forked_to_new_worktree"))
+                    }
                 }
                 conversationStore.appendSystem(L10n.text("ui.this_worktree_has_been_forked_from_the_source"), sessionID: responseSession.id)
-                setStatusMessage(L10n.text("ui.forked_to_new_worktree"))
                 return true
             } catch {
-                setStatusMessage(L10n.format("ui.native_fork_is_not_available_use_prompt_worktree", error.localizedDescription))
+                if let workspaceSelectionLease,
+                   isSelectionLeaseCurrent(workspaceSelectionLease) {
+                    setStatusMessage(L10n.format("ui.native_fork_is_not_available_use_prompt_worktree", error.localizedDescription))
+                }
             }
 
             var options = CodexAppServerTurnOptions.default
@@ -659,14 +762,14 @@ extension SessionStore {
                 projectID: workspace.id,
                 payload: CodexAppServerTurnPayload(prompt: prompt, options: options),
                 resume: nil,
-                clientMessageID: UUID().uuidString
+                clientMessageID: UUID().uuidString,
+                ifCurrent: workspaceSelectionLease ?? handoffIntent
             )
-            if started {
-                setStatusMessage(L10n.text("ui.moved_to_new_git_worktree"))
-            }
             return started
         } catch {
-            setErrorMessage(error.localizedDescription)
+            if isSelectionLeaseCurrent(handoffIntent) {
+                setErrorMessage(error.localizedDescription)
+            }
             return false
         }
     }
@@ -894,13 +997,20 @@ extension SessionStore {
         let workspace = item.workspace
         rememberWorkspace(workspace)
         clearWorkspaceUnavailable(workspace.id)
-        setSelectedProjectID(workspace.id)
-        setSelectedSessionID(nil)
+        let selectionLease = commitSelection(
+            projectID: workspace.id,
+            sessionID: nil,
+            reason: .invalidation
+        )
         insertExpandedProjectID(workspace.id)
         setErrorMessage(nil)
         worktreeErrorMessage = nil
         disconnectWebSocket()
-        await refreshSessions(forProjectID: workspace.id)
+        await refreshSessions(
+            forProjectID: workspace.id,
+            activatesProject: false,
+            foregroundLease: selectionLease
+        )
         return true
     }
 

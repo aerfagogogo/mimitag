@@ -13,6 +13,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const gatewayDefaultCollaborationInstructions = `# Collaboration Mode: Default
+
+You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+Your active mode changes only when new developer instructions with a different <collaboration_mode> change it; user requests or tool descriptions do not change mode by themselves.`
+
 func (p *appServerGatewayPolicy) validateClientFrame(messageType int, payload []byte) ([]byte, *appServerGatewayPolicyError) {
 	if p.isClosed() {
 		return nil, &appServerGatewayPolicyError{message: "app-server gateway 连接已关闭"}
@@ -1009,6 +1015,12 @@ func sanitizedGatewayCollaborationMode(raw any) (map[string]any, bool) {
 	safeSettings := map[string]any{
 		"reasoning_effort":       nil,
 		"developer_instructions": nil,
+	}
+	if modeValue == "default" {
+		// Codex 0.146 在同一 thread 从 Plan 切回 Default 时，不会把客户端的 null
+		// 展开成退出规划模式的 developer instruction。由可信 gateway 注入固定指令，
+		// 保证每个 turn 的 mode 独立生效，同时继续拒绝客户端自定义指令。
+		safeSettings["developer_instructions"] = gatewayDefaultCollaborationInstructions
 	}
 	// 默认模型不在 gateway 补齐；只有显式选择时才放进 collaboration settings。
 	if model, ok := gatewayStringParam(settings, "model"); ok {

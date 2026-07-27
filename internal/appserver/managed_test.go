@@ -122,6 +122,9 @@ while true; do sleep 1; done
 	if err != nil {
 		t.Fatal(err)
 	}
+	if process.StartedAt().IsZero() || time.Since(process.StartedAt()) > time.Minute {
+		t.Fatalf("managed Codex 应记录当前子进程启动时间：%s", process.StartedAt())
+	}
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer shutdownCancel()

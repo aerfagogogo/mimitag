@@ -10,7 +10,7 @@ use anyhow::Result;
 
 use alleycat_bridge_core::serve_stdio;
 #[cfg(unix)]
-use alleycat_bridge_core::{ServerOptions, serve_unix};
+use alleycat_bridge_core::{ServerOptions, SessionRegistryConfig, serve_unix};
 use alleycat_claude_bridge::ClaudeBridge;
 
 #[tokio::main]
@@ -42,6 +42,8 @@ async fn main() -> Result<()> {
                     ServerOptions {
                         socket_path: path,
                         unlink_stale: true,
+                        agent: "claude",
+                        registry: SessionRegistryConfig::default(),
                     },
                 )
                 .await

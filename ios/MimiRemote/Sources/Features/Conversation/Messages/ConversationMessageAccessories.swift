@@ -384,9 +384,11 @@ struct RuntimeSummaryCard: View {
 }
 
 private struct MessageContextMenuModifier: ViewModifier {
+    @EnvironmentObject private var themeStore: ThemeStore
     let message: ConversationMessage
     let retry: (() -> Void)?
     let stop: (() -> Void)?
+    @State private var isSelectingText = false
 
     func body(content: Content) -> some View {
         // 菜单只提供动作，预览由系统直接从调用处的真实消息表面生成。
@@ -398,6 +400,17 @@ private struct MessageContextMenuModifier: ViewModifier {
                     UIPasteboard.general.string = message.content
                 } label: {
                     Label(L10n.text("ui.copy"), systemImage: "doc.on.doc")
+                }
+
+                // 全幅气泡的 contextMenu 长按会抢占文本选区的长按手势，直接给正文加
+                // .textSelection 无法在气泡内起效；因此提供一个专用的可选择文本表面，
+                // 让用户能挑选返回内容里的任意片段单独复制。
+                if !selectableText.isEmpty {
+                    Button {
+                        isSelectingText = true
+                    } label: {
+                        Label(L10n.text("ui.select_text"), systemImage: "text.cursor")
+                    }
                 }
 
                 if message.role == .user && message.sendStatus == .failed, let retry {
@@ -412,6 +425,56 @@ private struct MessageContextMenuModifier: ViewModifier {
                     }
                 }
             }
+            .sheet(isPresented: $isSelectingText) {
+                MessageTextSelectionSheet(text: selectableText)
+                    .environmentObject(themeStore)
+            }
+    }
+
+    private var selectableText: String {
+        message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// 可选择文本表面：正文渲染层被 contextMenu 手势占用，这里用一个不带长按菜单的
+/// 独立视图承载 `.textSelection(.enabled)`，从而支持逐句/逐段挑选复制。
+struct MessageTextSelectionSheet: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dismiss) private var dismiss
+    let text: String
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .font(themeStore.uiFont(.body))
+                    .foregroundStyle(tokens.primaryText)
+                    .lineSpacing(2)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+            .background(tokens.background)
+            .navigationTitle(L10n.text("ui.select_text"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(L10n.text("ui.close")) { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        UIPasteboard.general.string = text
+                        dismiss()
+                    } label: {
+                        Label(L10n.text("ui.copy"), systemImage: "doc.on.doc")
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
     }
 }
 

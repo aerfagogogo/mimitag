@@ -15,7 +15,7 @@
 //! (`PiSessionRef`/`ClaudeSessionRef`) and never see a runtime type erasure
 //! cost — `ThreadIndex<M>` is monomorphized.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -198,6 +198,14 @@ where
         H: Hydrator<M> + ?Sized,
     {
         let scanned = hydrator.scan().await?;
+        self.hydrate_entries(scanned).await
+    }
+
+    /// Absorb already-scanned rows whose `thread_id` we don't know about.
+    ///
+    /// Bridge-specific startup repair can inspect one scanner result and then
+    /// hydrate it without paying for a second filesystem scan.
+    pub async fn hydrate_entries(&self, scanned: Vec<IndexEntry<M>>) -> Result<usize> {
         if scanned.is_empty() {
             return Ok(0);
         }
@@ -233,6 +241,40 @@ where
             guard.insert(entry.thread_id.clone(), entry);
         }
         self.persist().await
+    }
+
+    /// 批量插入或替换索引行并只落盘一次，避免启动迁移按会话重复写文件。
+    pub async fn upsert_many(&self, entries: Vec<IndexEntry<M>>) -> Result<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let updated = entries.len();
+        {
+            let mut guard = self.inner.write().await;
+            for entry in entries {
+                guard.insert(entry.thread_id.clone(), entry);
+            }
+        }
+        self.persist().await?;
+        Ok(updated)
+    }
+
+    /// 批量移除索引行并只落盘一次，供 bridge 启动时清理旧版本写入的无效记录。
+    pub async fn remove_many(&self, thread_ids: &[String]) -> Result<usize> {
+        if thread_ids.is_empty() {
+            return Ok(0);
+        }
+        let ids: HashSet<&str> = thread_ids.iter().map(String::as_str).collect();
+        let removed = {
+            let mut guard = self.inner.write().await;
+            let before = guard.len();
+            guard.retain(|id, _| !ids.contains(id.as_str()));
+            before - guard.len()
+        };
+        if removed > 0 {
+            self.persist().await?;
+        }
+        Ok(removed)
     }
 
     /// Update preview + `updated_at`. Silently no-ops on missing rows so

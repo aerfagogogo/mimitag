@@ -85,6 +85,39 @@ func TestCheckerMarksMissingTailscaleAsWarning(t *testing.T) {
 	}
 }
 
+func TestCheckerRunReadinessSkipsExternalProcessDiagnostics(t *testing.T) {
+	checker := newTestChecker(t, config.Config{
+		Listen:  "127.0.0.1:8787",
+		Auth:    config.AuthConfig{Token: "0123456789abcdef0123456789abcdef"},
+		Runtime: config.RuntimeConfig{Type: "codex_app_server"},
+		AppServer: config.AppServerConfig{
+			Transport: "ws",
+			Managed:   false,
+			Listen:    "ws://127.0.0.1:4222",
+		},
+		Codex:  config.CodexConfig{Bin: filepath.Join(t.TempDir(), "missing-codex")},
+		Claude: config.ClaudeConfig{Enabled: true, BridgeBin: filepath.Join(t.TempDir(), "missing-bridge")},
+		Projects: []config.ProjectConfig{{
+			ID: "demo", Name: "Demo", Path: t.TempDir(),
+		}},
+	})
+
+	results := checker.RunReadiness(context.Background())
+	if !results.OK {
+		t.Fatalf("外部诊断不可用不应阻断当前 readiness：%+v", results)
+	}
+	for _, excluded := range []string{"codex", "codex-app-server", "claude-bridge", "tailscale", "macos-code-signing"} {
+		if hasCheck(results, excluded) {
+			t.Fatalf("readiness 不应执行或返回完整诊断项 %q：%+v", excluded, results.Checks)
+		}
+	}
+	for _, required := range []string{"token", "projects", "runtime", "app-server"} {
+		if !hasCheck(results, required) {
+			t.Fatalf("readiness 缺少关键静态检查 %q：%+v", required, results.Checks)
+		}
+	}
+}
+
 func TestDesignatedRequirementRejectsPerBuildCDHash(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -274,6 +307,39 @@ func TestClaudeBridgeCheckRequiresCompatibleVersion(t *testing.T) {
 				t.Fatalf("不兼容版本应返回可执行修复命令：%+v", check)
 			}
 		})
+	}
+}
+
+func TestClaudeBridgeCheckFallsBackToBundledCopy(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Skip("拿不到测试可执行文件路径")
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
+		executable = resolved
+	}
+	sibling := filepath.Join(filepath.Dir(executable), "alleycat-claude-bridge")
+	if _, err := os.Stat(sibling); err == nil {
+		t.Skip("测试二进制旁已存在同名文件，跳过以免干扰")
+	}
+	if err := os.WriteFile(
+		sibling,
+		[]byte("#!/bin/sh\nprintf 'alleycat-claude-bridge 0.2.6\\n'\n"),
+		0o755,
+	); err != nil {
+		t.Skip("无法在测试二进制旁写入：" + err.Error())
+	}
+	t.Cleanup(func() { _ = os.Remove(sibling) })
+
+	checker := newTestChecker(t, config.Config{
+		Claude: config.ClaudeConfig{
+			Enabled:   true,
+			BridgeBin: filepath.Join(t.TempDir(), "stale-bridge-path"),
+		},
+	})
+	check := checker.claudeBridgeCheck(context.Background())
+	if !check.OK || !strings.Contains(check.Message, "0.2.6 可用") {
+		t.Fatalf("Doctor 应回退检查 Mac App 随包 bridge：%+v", check)
 	}
 }
 

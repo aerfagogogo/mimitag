@@ -51,6 +51,7 @@ final class MockWebSocketClient: SessionWebSocketClient {
     var onStatus: ((WebSocketStatus) -> Void)?
     var onSendAccepted: ((ClientMessageID?) -> Void)?
     var onSendFailure: ((ClientMessageID?, String) -> Void)?
+    var onTurnSendOutcome: ((ClientMessageID?, TurnSendOutcome) -> Void)?
     var onApprovalDecisionFailure: ((String, String) -> Void)?
     var onUserInputResponseFailure: ((String, String) -> Void)?
     var onControlFailure: ((String) -> Void)?
@@ -64,6 +65,7 @@ final class MockWebSocketClient: SessionWebSocketClient {
     private(set) var sentApprovals: [(approvalID: String, decision: String, message: String?)] = []
     private(set) var sentUserInputResponses: [(requestID: String, answers: [String: [String]])] = []
     private(set) var disconnectCallCount = 0
+    private(set) var acknowledgedEvents: [AgentEvent] = []
     var sendTurnResult = true
     var sendGuidanceResult = true
     var sendCtrlCResult = true
@@ -83,6 +85,10 @@ final class MockWebSocketClient: SessionWebSocketClient {
     func disconnect() {
         disconnectCallCount += 1
         onStatus?(.disconnected)
+    }
+
+    func acknowledgeAppliedEvent(_ event: AgentEvent) {
+        acknowledgedEvents.append(event)
     }
 
     func sendInput(_ text: String, clientMessageID: ClientMessageID?) -> Bool {
@@ -436,6 +442,7 @@ final class MockSessionStoreClient: SessionStoreAPIClient {
     }
     private var requestedThreadSearchCursorsStorage: [String?] = []
     var requestedCapabilityPaths: [String?] = []
+    var requestedCapabilityForceReloads: [Bool] = []
     var requestedResolvePaths: [String] = []
     var requestedWorktreeCreates: [RequestedWorktreeCreate] = []
     var requestedWorktreeBranchPaths: [String] = []
@@ -588,8 +595,9 @@ final class MockSessionStoreClient: SessionStoreAPIClient {
         return rateLimitsByRuntime[runtimeProvider]
     }
 
-    func capabilities(path: String?) async throws -> CapabilityListResponse {
+    func capabilities(path: String?, forceReload: Bool) async throws -> CapabilityListResponse {
         requestedCapabilityPaths.append(path)
+        requestedCapabilityForceReloads.append(forceReload)
         let key = path ?? ""
         switch capabilityResults[key] {
         case .success(let response):
@@ -1023,6 +1031,7 @@ final class MutableSessionPageClient: SessionStoreAPIClient {
     var historyPages: [SessionID: HistoryMessagesPage]
     var historyCursorPages: [String: HistoryMessagesPage]
     var requestedMessageCursors: [String?] = []
+    var requestedSessionListConsistencies: [SessionListConsistency] = []
 
     init(
         projects: [AgentProject],
@@ -1059,6 +1068,20 @@ final class MutableSessionPageClient: SessionStoreAPIClient {
             return page
         }
         return page
+    }
+
+    func sessionsPage(
+        workspace: AgentWorkspace,
+        cursor: String?,
+        limit: Int?,
+        consistency: SessionListConsistency
+    ) async throws -> SessionsPage {
+        requestedSessionListConsistencies.append(consistency)
+        return try await sessionsPage(
+            projectID: workspace.rootProjectID ?? workspace.id,
+            cursor: cursor,
+            limit: limit
+        )
     }
 
     func session(id: String, afterSeq: EventSequence?) async throws -> SessionResponse {

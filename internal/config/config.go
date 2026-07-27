@@ -10,12 +10,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/gaixianggeng/mimi-remote/internal/claudebridge"
 )
 
 const AppName = "mimi-remote"
 
 type Config struct {
 	Listen        string          `json:"listen"`
+	Network       NetworkConfig   `json:"network"`
 	Auth          AuthConfig      `json:"auth"`
 	Runtime       RuntimeConfig   `json:"runtime"`
 	AppServer     AppServerConfig `json:"app_server"`
@@ -31,6 +34,12 @@ type Config struct {
 	WorktreesRoot string          `json:"worktrees_root"`
 	Actions       []ActionConfig  `json:"actions"`
 	DevInsecure   bool            `json:"dev_insecure"`
+}
+
+type NetworkConfig struct {
+	// AllowLAN 是显式安全边界。关闭时继续只监听配置地址和 loopback；
+	// 打开后 agentd 才会监听 IPv4 通配地址，同时服务 Tailscale 与局域网。
+	AllowLAN bool `json:"allow_lan"`
 }
 
 type AuthConfig struct {
@@ -487,8 +496,8 @@ func (c Config) Validate() error {
 	if c.Auth.Token == "" && !c.DevInsecure {
 		return fmt.Errorf("AGENTD_TOKEN 或 auth.token 不能为空；开发临时绕过请设置 AGENTD_DEV_INSECURE=true")
 	}
-	if c.DevInsecure && !isLoopbackListen(c.Listen) {
-		return fmt.Errorf("dev_insecure 只允许 loopback listen；远程访问必须使用 Bearer Token")
+	if c.DevInsecure && (!isLoopbackListen(c.Listen) || c.Network.AllowLAN) {
+		return fmt.Errorf("dev_insecure 只允许 loopback listen 且不能启用局域网；远程访问必须使用 Bearer Token")
 	}
 	if c.Auth.Token != "" && len(c.Auth.Token) < 16 {
 		return fmt.Errorf("token 太短，建议至少 32 字符")
@@ -499,7 +508,7 @@ func (c Config) Validate() error {
 	if c.Codex.Bin == "" {
 		return fmt.Errorf("codex.bin 不能为空")
 	}
-	if c.Claude.Enabled && strings.TrimSpace(c.Claude.BridgeBin) == "" {
+	if c.Claude.Enabled && strings.TrimSpace(c.Claude.BridgeBin) == "" && !claudebridge.BundledAvailable() {
 		return fmt.Errorf("claude.bridge_bin 不能为空")
 	}
 	if c.Claude.Enabled && c.Claude.MaxConcurrentBridges <= 0 {

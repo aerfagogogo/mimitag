@@ -368,12 +368,12 @@ final class MarkdownRenderingTests: XCTestCase {
         })
     }
 
-    func testMarkdownStyleKeepsConversationTypographyCompactAndScaled() {
+    func testMarkdownStyleKeepsConversationTypographyReadableAndScaled() {
         let style = MarkdownStyle.make(role: .assistant, colorScheme: .light, fontScale: 1.2)
 
-        XCTAssertEqual(style.blockSpacing, 7)
-        XCTAssertEqual(style.textLineSpacing, 2)
-        XCTAssertEqual(style.scaled(15), 18, accuracy: 0.001)
+        XCTAssertEqual(style.blockSpacing, 10)
+        XCTAssertEqual(style.textLineSpacing, 4)
+        XCTAssertEqual(style.scaled(16), 19.2, accuracy: 0.001)
     }
 
     func testStreamingMarkdownPerformanceStaysBoundedForLargeOpenBlocks() {

@@ -53,7 +53,7 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AppLanguage.stored(in: defaults), .system)
     }
 
-    func testVoiceInputProviderDefaultsToCodexAndRejectsUnknownValues() {
+    func testVoiceInputProviderDefaultsToCodexAndPreservesKnownSelection() {
         let suiteName = "VoiceInputProviderTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -61,7 +61,25 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(VoiceInputProvider.stored(in: defaults), .codex)
         defaults.set(VoiceInputProvider.apple.rawValue, forKey: VoiceInputProvider.storageKey)
         XCTAssertEqual(VoiceInputProvider.stored(in: defaults), .apple)
+        defaults.set(VoiceInputProvider.codex.rawValue, forKey: VoiceInputProvider.storageKey)
+        XCTAssertEqual(VoiceInputProvider.stored(in: defaults), .codex)
         defaults.set("future-provider", forKey: VoiceInputProvider.storageKey)
         XCTAssertEqual(VoiceInputProvider.stored(in: defaults), .codex)
+    }
+
+    func testVoiceInputProvidersExposeDistinctNativeSystemIcons() {
+        XCTAssertEqual(VoiceInputProvider.codex.icon, .system("waveform"))
+        XCTAssertEqual(VoiceInputProvider.apple.icon, .system("siri"))
+    }
+
+    func testCodexVoiceInputDescriptionExplainsPostRecordingTranscription() {
+        XCTAssertEqual(
+            L10n.text("ui.codex_voice_input_description", language: .simplifiedChinese),
+            "使用 Codex 内置语音能力 · 录音结束后转写"
+        )
+        XCTAssertEqual(
+            L10n.text("ui.codex_voice_input_description", language: .english),
+            "Uses Codex built-in voice capability · Transcribes after recording"
+        )
     }
 }

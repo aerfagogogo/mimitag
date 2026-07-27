@@ -106,6 +106,19 @@ extension SessionStore {
                 self?.setErrorMessage(L10n.format("ui.sending_failed_value", message))
             }
         }
+        socket.onTurnSendOutcome = { [weak self] clientMessageID, outcome in
+            Task { @MainActor in
+                guard let self,
+                      self.isCurrentWebSocketConnection(sessionID: session.id, generation: connectionGeneration) else {
+                    return
+                }
+                self.handleTurnSendOutcome(
+                    clientMessageID: clientMessageID,
+                    sessionID: session.id,
+                    outcome: outcome
+                )
+            }
+        }
         socket.onApprovalDecisionFailure = { [weak self] approvalID, message in
             Task { @MainActor in
                 guard self?.isCurrentWebSocketConnection(sessionID: session.id, generation: connectionGeneration) == true else {
@@ -500,6 +513,10 @@ extension SessionStore {
     }
 
     func applyRuntimeEvent(_ event: AgentEvent, sessionID: String) async {
+        let replayAckSocket = replayBoundarySocket(for: event, fallbackSessionID: sessionID)
+        defer {
+            replayAckSocket?.acknowledgeAppliedEvent(event)
+        }
         if let metadata = metadata(for: event) {
             recordEventWatermark(metadata, fallbackSessionID: sessionID)
         }
@@ -584,8 +601,21 @@ extension SessionStore {
                     dispatchNextQueuedRunningTurnIfIdle(sessionID: id)
                 }
             }
+            scheduleDeferredFullHistoryReloadAfterTurnCompletion(sessionID: id)
         }
         await scheduleRuntimeNotificationIfNeeded(runtimeNotification)
+    }
+
+    func replayBoundarySocket(
+        for event: AgentEvent,
+        fallbackSessionID: SessionID
+    ) -> (any SessionWebSocketClient)? {
+        guard metadata(for: event)?.replayBoundarySequence != nil else { return nil }
+        let sessionID = metadata(for: event)?.sessionID ?? fallbackSessionID
+        if connectedSessionID == sessionID, let webSocket {
+            return webSocket
+        }
+        return queuedSessionSockets[sessionID]
     }
 
     func shouldIgnoreStaleTurnCompletion(
@@ -667,9 +697,6 @@ extension SessionStore {
                 clearRuntimeActivity(sessionID: id)
             }
             contextStore.updateStatus(sessionID: id, status: status)
-            if status == SessionStatus.completed.rawValue {
-                completeActiveThreadGoalIfNeeded(sessionID: id)
-            }
         }
         for mutation in output.activeTurnMutations {
             applyActiveTurnMutation(mutation)
@@ -948,6 +975,14 @@ extension SessionStore {
         let existing = runtimeActivityBySessionID[sessionID]
         let resolvedStart = turnStartedAt ?? existing?.turnStartedAt ?? activityAt
         let next = RuntimeActivitySnapshot(turnStartedAt: resolvedStart, lastActivityAt: activityAt)
+        if let existing, existing.turnStartedAt == resolvedStart {
+            let elapsed = activityAt.timeIntervalSince(existing.lastActivityAt)
+            // 流式事件可能几十毫秒一次。活动时间只用于“仍在运行”的视觉提示，
+            // 合并短间隔更新可避免 Debug/-Onone 下反复刷新整棵 SessionStore 观察树。
+            if elapsed >= 0, elapsed < 1 {
+                return
+            }
+        }
         guard existing != next else {
             return
         }
@@ -1190,6 +1225,9 @@ extension SessionStore {
         forgetWorkspaceAfterWorktreeDeletion(workspace)
         gitStatusByPath.removeValue(forKey: workspace.path)
         gitStatusErrorByPath.removeValue(forKey: workspace.path)
+        workspaceGitSummaryByPath.removeValue(forKey: workspace.path)
+        workspaceGitSummaryUpdatedAtByPath.removeValue(forKey: workspace.path)
+        refreshingWorkspaceGitSummaryPaths.remove(workspace.path)
         gitActionErrorByPath.removeValue(forKey: workspace.path)
         commandActionsByPath.removeValue(forKey: workspace.path)
         commandActionErrorByPath.removeValue(forKey: workspace.path)
@@ -1219,8 +1257,11 @@ extension SessionStore {
         sessions = sessions.filter { $0.projectID != project.id }
         clearWorkspaceUnavailable(project.id)
         if selectedProjectID == project.id {
-            setSelectedProjectID(nil)
-            setSelectedSessionID(nil)
+            _ = commitSelection(
+                projectID: nil,
+                sessionID: nil,
+                reason: .invalidation
+            )
             disconnectWebSocket()
         }
     }
@@ -1269,7 +1310,11 @@ extension SessionStore {
         }
     }
 
-    func handleWorkspaceLoadFailure(workspace: AgentWorkspace, error: Error) async {
+    func handleWorkspaceLoadFailure(
+        workspace: AgentWorkspace,
+        error: Error,
+        reportForeground: Bool = true
+    ) async {
         if terminateConnectionIfCredentialsInvalid(error) {
             return
         }
@@ -1279,6 +1324,7 @@ extension SessionStore {
                 "ui.session_list_retry_seconds_count",
                 count: policyFailure.retryAfterSeconds
             )
+            guard reportForeground else { return }
             if sessions(forProjectID: workspace.id).isEmpty {
                 // 首屏还没有可展示数据时保留一个友好错误标记，让 bootstrap 按 cooldown 继续自愈。
                 setStatusMessage(message)
@@ -1294,11 +1340,15 @@ extension SessionStore {
         case .unavailable(let message):
             markWorkspaceUnavailable(workspace.id)
             // 明确的不可用态：清掉全局错误，bootstrap 的退避重试不再死磕一个已失效的目录。
-            setErrorMessage(nil)
-            setStatusMessage(message)
+            if reportForeground {
+                setErrorMessage(nil)
+                setStatusMessage(message)
+            }
         case .available, .indeterminate:
             clearWorkspaceUnavailable(workspace.id)
-            setErrorMessage(error.localizedDescription)
+            if reportForeground {
+                setErrorMessage(error.localizedDescription)
+            }
         }
     }
 
@@ -1401,10 +1451,82 @@ extension SessionStore {
         rebuildProjectSessionListSnapshot(forProjectID: projectID)
     }
 
+    func currentSelectionLease() -> SessionSelectionLease {
+        SessionSelectionLease(
+            generation: selectionGeneration,
+            projectID: selectedProjectID,
+            sessionID: selectedSessionID
+        )
+    }
+
+    func isSelectionLeaseCurrent(_ lease: SessionSelectionLease) -> Bool {
+        lease == currentSelectionLease()
+    }
+
+    /// 为“点击通知后加载”“创建 Worktree 后打开”等延迟导航预留一次意图。
+    /// 后续任何用户选择都会推进代次，使旧请求完成时无法再提交导航。
+    @discardableResult
+    func reserveSelectionIntent() -> SessionSelectionLease {
+        selectionGeneration &+= 1
+        return currentSelectionLease()
+    }
+
+    @discardableResult
+    func commitSelection(
+        projectID: String?,
+        sessionID: SessionID?,
+        reason: SessionSelectionCommit.Reason,
+        ifCurrent lease: SessionSelectionLease? = nil
+    ) -> SessionSelectionLease? {
+        if let lease, !isSelectionLeaseCurrent(lease) {
+            return nil
+        }
+
+        selectionGeneration &+= 1
+        if selectedProjectID != projectID {
+            selectedProjectID = projectID
+        }
+        if selectedSessionID != sessionID {
+            selectedSessionID = sessionID
+        }
+        let committedLease = currentSelectionLease()
+        lastSelectionCommit = SessionSelectionCommit(
+            sequence: committedLease.generation,
+            projectID: projectID,
+            sessionID: sessionID,
+            reason: reason
+        )
+        return committedLease
+    }
+
+    /// optimistic/resume ID 只能替换自己持有的当前选择。数据迁移不依赖该结果，
+    /// 因而用户已经切走时仍可完成后台归档，但不会抢回页面或 WebSocket。
+    @discardableResult
+    func replaceSelectionIfCurrent(
+        from previousID: SessionID,
+        to session: AgentSession,
+        lease: SessionSelectionLease
+    ) -> SessionSelectionLease? {
+        guard isSelectionLeaseCurrent(lease),
+              selectedSessionID == previousID else {
+            return nil
+        }
+        guard previousID != session.id else {
+            return lease
+        }
+        return commitSelection(
+            projectID: session.projectID,
+            sessionID: session.id,
+            reason: .identityReplacement(previousID: previousID),
+            ifCurrent: lease
+        )
+    }
+
     func setSelectedProjectID(_ value: String?) {
         guard selectedProjectID != value else {
             return
         }
+        selectionGeneration &+= 1
         selectedProjectID = value
     }
 
@@ -1412,6 +1534,7 @@ extension SessionStore {
         guard selectedSessionID != value else {
             return
         }
+        selectionGeneration &+= 1
         selectedSessionID = value
     }
 
@@ -1468,17 +1591,21 @@ extension SessionStore {
         queuedTurnAwaitingStartSessionIDs.removeAll()
         queuedTurnBlockedCompletionIDBySessionID.removeAll()
         queuedGuidanceDispatchClientMessageIDs.removeAll()
-        setSelectedSessionID(nil)
-        setSelectedProjectID(nil)
+        _ = commitSelection(
+            projectID: nil,
+            sessionID: nil,
+            reason: .invalidation
+        )
         setProjectsIfChanged([])
         setRecentWorkspacesIfChanged([])
         setSidebarProjectsIfChanged([])
+        workspaceGitSummaryByPath = [:]
+        workspaceGitSummaryUpdatedAtByPath = [:]
+        refreshingWorkspaceGitSummaryPaths = []
         unavailableWorkspaceIDs = []
         sessions = []
         setExpandedProjectIDs([])
         setShowingAllSessionProjectIDs([])
-        frozenAllSessionOrder = []
-        frozenSessionOrderByProjectID = [:]
         sessionPageCursorByProjectID = [:]
         sessionHasMoreByProjectID = [:]
         sessionProjectsWithAdditionalPages = []
@@ -1505,6 +1632,7 @@ extension SessionStore {
         historyLoadJobTokenBySessionID = [:]
         historyLoadedSignatureBySessionID = [:]
         historyLoadedQualityBySessionID = [:]
+        deferredFullHistorySessionIDs = []
         freshEmptyHistorySignatureBySessionID = [:]
         initialHistoryLoadingSessionIDs = []
         historyLoadProgressBySessionID = [:]
@@ -1631,22 +1759,6 @@ extension SessionStore {
         var next = incoming
         next.goal = normalizedThreadGoalForApply(goal, sessionID: incoming.id, respectsLocalCompletion: true)
         return next
-    }
-
-    func completeActiveThreadGoalIfNeeded(sessionID: SessionID) {
-        // 目标消息仍在下一轮队列中时，本次完成属于前一个 turn，不能提前结束目标。
-        guard !hasQueuedGoalTurn(sessionID: sessionID) else {
-            return
-        }
-        guard let session = sessionsByID[sessionID],
-              let goal = Self.matchingThreadGoal(for: session, context: contextStore.context(for: session.id)),
-              goal.status == .active
-        else {
-            return
-        }
-        // turn/completed 是本地实时链路看到的权威完成信号；目标元数据刷新可能稍晚，
-        // 先把 UI 收敛到完成态，避免任务结束后 composer 仍显示“运行中”。
-        applyThreadGoal(completedGoal(from: goal), fallbackSessionID: sessionID, respectsLocalCompletion: false)
     }
 
     func normalizedThreadGoalForApply(

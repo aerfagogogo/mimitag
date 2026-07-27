@@ -98,7 +98,7 @@ protocol SessionStoreAPIClient {
     func projects() async throws -> [AgentProject]
     func modelOptions() async throws -> [CodexAppServerModelOption]
     func runtimeChannelAvailable(runtimeProvider: String) async throws -> Bool
-    func capabilities(path: String?) async throws -> CapabilityListResponse
+    func capabilities(path: String?, forceReload: Bool) async throws -> CapabilityListResponse
     func resolveWorkspace(path: String) async throws -> AgentWorkspace
     func createWorktree(path: String, name: String?, base: String?, branch: String?) async throws -> WorktreeCreateResponse
     func worktreeBranches(path: String) async throws -> WorktreeBranchListResponse
@@ -113,6 +113,7 @@ protocol SessionStoreAPIClient {
     func commandActions(path: String) async throws -> [AgentCommandAction]
     func runCommandAction(path: String, id: String, confirmed: Bool) async throws -> CommandActionRunResponse
     func gitStatus(path: String) async throws -> GitStatusResponse
+    func gitStatusSummary(path: String) async throws -> GitStatusResponse
     func gitAction(path: String, action: GitActionKind, files: [String]) async throws -> GitStatusResponse
     func gitPatchAction(path: String, action: GitActionKind, patch: String) async throws -> GitStatusResponse
     func gitCommit(path: String, message: String) async throws -> GitStatusResponse
@@ -169,8 +170,12 @@ extension SessionStoreAPIClient {
         []
     }
 
-    func capabilities(path: String?) async throws -> CapabilityListResponse {
+    func capabilities(path: String?, forceReload: Bool) async throws -> CapabilityListResponse {
         throw AgentAPIError.invalidResponse
+    }
+
+    func capabilities(path: String?) async throws -> CapabilityListResponse {
+        try await capabilities(path: path, forceReload: false)
     }
 
     func session(id: String) async throws -> SessionResponse {
@@ -285,6 +290,11 @@ extension SessionStoreAPIClient {
     func gitStatus(path: String) async throws -> GitStatusResponse {
         // 默认实现只服务于不直连 agentd 的测试替身；真实 client 会覆写并请求 /api/git/status。
         throw AgentAPIError.invalidResponse
+    }
+
+    func gitStatusSummary(path: String) async throws -> GitStatusResponse {
+        // 测试替身未关心摘要时复用完整状态；生产 client 会发送 summary_only=true。
+        try await gitStatus(path: path)
     }
 
     func gitAction(path: String, action: GitActionKind, files: [String]) async throws -> GitStatusResponse {

@@ -1,0 +1,195 @@
+import Foundation
+
+enum MenuRuntimeUsageTintRole: Equatable {
+    case codexLong
+    case claudeLong
+    case claudeShort
+}
+
+struct MenuRuntimeUsageItem: Equatable, Identifiable {
+    let id: String
+    let runtimeID: String
+    let providerName: String
+    let window: AgentRuntimeRateLimitWindow
+    let isExhausted: Bool
+    let tintRole: MenuRuntimeUsageTintRole
+}
+
+enum MenuRuntimePresentation {
+    static func versionText(for runtime: AgentRuntimeStatus?) -> String? {
+        guard let runtime,
+              let version = runtime.version?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !version.isEmpty
+        else {
+            return nil
+        }
+        switch runtime.id {
+        case "codex":
+            return "Codex CLI \(version)"
+        case "claude":
+            return "Claude Bridge \(version)"
+        default:
+            return "运行时 \(version)"
+        }
+    }
+
+    static func detailText(
+        for runtime: AgentRuntimeStatus?,
+        missingDetail: String
+    ) -> String {
+        guard let runtime else {
+            return missingDetail
+        }
+        if runtime.reason == "refresh_in_progress" {
+            return "正在后台获取连接与额度状态…"
+        }
+        // 认证类型与状态必须同时匹配，避免把其他已连接账户误显示成 API Key。
+        let isConfiguredAPIKey = runtime.authMode == "api_key"
+            && (runtime.state == .available || runtime.state == .connected)
+        if isConfiguredAPIKey {
+            return "API Key 已配置（按量计费），将在首次请求时验证有效性。"
+        }
+        if runtime.reason == "bedrock_credentials_configured_unverified" {
+            return "Bedrock 凭据来源已配置，将在首次请求时验证有效性。"
+        }
+        if runtime.reason == "account_configured_unverified" {
+            return "账户已配置，但尚未验证凭据是否有效。"
+        }
+        switch runtime.state {
+        case .disabled:
+            return "可在设置中启用 Claude 实验通道。"
+        case .signedOut:
+            return "请在这台 Mac 上完成登录。"
+        case .unavailable:
+            return "运行时暂不可用，请刷新或运行诊断。"
+        case .connected, .available:
+            return "尚未获取到额度数据。"
+        }
+    }
+
+    static func uptimeText(
+        for runtime: AgentRuntimeStatus?,
+        at now: Date = Date()
+    ) -> String? {
+        guard let startedAt = runtime?.startedDate,
+              startedAt <= now.addingTimeInterval(60)
+        else {
+            return nil
+        }
+        let totalMinutes = max(0, Int(now.timeIntervalSince(startedAt) / 60))
+        if totalMinutes == 0 {
+            return "已运行不足 1 分钟"
+        }
+
+        let days = totalMinutes / (24 * 60)
+        let hours = totalMinutes % (24 * 60) / 60
+        let minutes = totalMinutes % 60
+        if days > 0 {
+            return hours > 0
+                ? "已运行 \(days)天 \(hours)小时"
+                : "已运行 \(days)天"
+        }
+        if hours > 0 {
+            return minutes > 0
+                ? "已运行 \(hours)小时 \(minutes)分钟"
+                : "已运行 \(hours)小时"
+        }
+        return "已运行 \(minutes)分钟"
+    }
+
+    /// 与设置页保持相同的三环语义：Codex 长窗口、Claude 长窗口、Claude 短窗口。
+    /// primary/secondary 的槽位并不稳定，因此始终按服务端返回的真实窗口时长选择。
+    static func usageItems(
+        codex: AgentRuntimeStatus?,
+        claude: AgentRuntimeStatus?
+    ) -> [MenuRuntimeUsageItem] {
+        var result: [MenuRuntimeUsageItem] = []
+        if let codex, let candidate = longWindow(in: codex) {
+            result.append(
+                usageItem(
+                    runtime: codex,
+                    candidate: candidate,
+                    tintRole: .codexLong
+                )
+            )
+        }
+        if let claude, let longCandidate = longWindow(in: claude) {
+            result.append(
+                usageItem(
+                    runtime: claude,
+                    candidate: longCandidate,
+                    tintRole: .claudeLong
+                )
+            )
+            if let shortCandidate = shortWindow(in: claude, excluding: longCandidate.slot) {
+                result.append(
+                    usageItem(
+                        runtime: claude,
+                        candidate: shortCandidate,
+                        tintRole: .claudeShort
+                    )
+                )
+            }
+        }
+        return Array(result.prefix(3))
+    }
+
+    private struct UsageCandidate {
+        let slot: String
+        let window: AgentRuntimeRateLimitWindow
+    }
+
+    private static func longWindow(in runtime: AgentRuntimeStatus) -> UsageCandidate? {
+        candidates(in: runtime).max {
+            ($0.window.windowDurationMins ?? -1) < ($1.window.windowDurationMins ?? -1)
+        }
+    }
+
+    private static func shortWindow(
+        in runtime: AgentRuntimeStatus,
+        excluding slot: String
+    ) -> UsageCandidate? {
+        candidates(in: runtime)
+            .filter { $0.slot != slot }
+            .min {
+                ($0.window.windowDurationMins ?? Int64.max)
+                    < ($1.window.windowDurationMins ?? Int64.max)
+            }
+    }
+
+    private static func candidates(in runtime: AgentRuntimeStatus) -> [UsageCandidate] {
+        guard let limits = runtime.rateLimits else { return [] }
+        return [
+            limits.primary.map { UsageCandidate(slot: "primary", window: $0) },
+            limits.secondary.map { UsageCandidate(slot: "secondary", window: $0) },
+        ]
+        .compactMap { $0 }
+        .filter {
+            $0.window.usedPercent != nil
+                || $0.window.windowDurationMins != nil
+                || $0.window.resetsAt != nil
+        }
+    }
+
+    private static func usageItem(
+        runtime: AgentRuntimeStatus,
+        candidate: UsageCandidate,
+        tintRole: MenuRuntimeUsageTintRole
+    ) -> MenuRuntimeUsageItem {
+        let reached = runtime.rateLimits?.reachedType?.lowercased() ?? ""
+        let providerName: String
+        switch runtime.id.lowercased() {
+        case "codex": providerName = "Codex"
+        case "claude": providerName = "Claude"
+        default: providerName = runtime.title
+        }
+        return MenuRuntimeUsageItem(
+            id: "\(runtime.id):\(candidate.slot)",
+            runtimeID: runtime.id,
+            providerName: providerName,
+            window: candidate.window,
+            isExhausted: candidate.window.isExhausted || reached.contains(candidate.slot),
+            tintRole: tintRole
+        )
+    }
+}

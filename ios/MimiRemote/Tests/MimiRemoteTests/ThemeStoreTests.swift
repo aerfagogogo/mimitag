@@ -168,8 +168,8 @@ final class ThemeStoreTests: XCTestCase {
         XCTAssertEqual(ThemePreset.codex.title, L10n.text("ui.warm_sun"))
         XCTAssertEqual(ThemePreset.codex.subtitle, L10n.text("ui.neutral_warm_white_with_a_single_main_color"))
 
-        assertRGB(lightBackground, red: 249, green: 248, blue: 245)
-        assertRGB(lightSidebarBackground, red: 249, green: 248, blue: 245)
+        assertRGB(lightBackground, red: 250, green: 247, blue: 241)
+        assertRGB(lightSidebarBackground, red: 250, green: 247, blue: 241)
         assertRGB(lightSelectionFill, red: 239, green: 236, blue: 237)
         assertRGB(lightSidebarHoverFill, red: 240, green: 239, blue: 237)
         assertRGB(lightInputBackground, red: 255, green: 255, blue: 255)
@@ -184,25 +184,25 @@ final class ThemeStoreTests: XCTestCase {
         XCTAssertGreaterThan(lightElevatedSurface.red, lightElevatedSurface.blue)
         XCTAssertLessThan(abs(lightElevatedSurface.red - lightElevatedSurface.blue), 0.12)
 
-        XCTAssertEqual(lightAccent.red, lightUserBubble.red, accuracy: 0.001)
-        XCTAssertEqual(lightAccent.green, lightUserBubble.green, accuracy: 0.001)
-        XCTAssertEqual(lightAccent.blue, lightUserBubble.blue, accuracy: 0.001)
+        XCTAssertEqual(lightElevatedSurface.red, lightUserBubble.red, accuracy: 0.001)
+        XCTAssertEqual(lightElevatedSurface.green, lightUserBubble.green, accuracy: 0.001)
+        XCTAssertEqual(lightElevatedSurface.blue, lightUserBubble.blue, accuracy: 0.001)
         XCTAssertEqual(codexSwatchBackground.red, lightBackground.red, accuracy: 0.001)
         XCTAssertEqual(codexSwatchBackground.green, lightBackground.green, accuracy: 0.001)
         XCTAssertEqual(codexSwatchBackground.blue, lightBackground.blue, accuracy: 0.001)
         XCTAssertGreaterThan(lightSuccess.green, lightSuccess.red)
         XCTAssertGreaterThan(lightSuccess.green, lightSuccess.blue)
 
-        // 浅色保留品牌深紫；深色主按钮使用独立梅紫，避免大面积浅灰紫填充。
-        assertRGB(lightUserBubble, red: 74, green: 20, blue: 74)
+        // 用户内容使用中性表面；品牌深紫只保留给操作和色卡。
+        assertRGB(lightUserBubble, red: 244, green: 243, blue: 240)
         assertRGB(rgba(lightTokens.primaryAction), red: 74, green: 20, blue: 74)
         let darkPrimaryAction = rgba(darkTokens.primaryAction)
         assertRGB(darkPrimaryAction, red: 149, green: 85, blue: 158)
         XCTAssertGreaterThan(colorDistance(darkAccent, darkPrimaryAction), 0.1)
         XCTAssertGreaterThan(lightUserBubble.alpha, 0.99)
-        XCTAssertEqual(codexSwatchForeground.red, lightUserBubble.red, accuracy: 0.001)
-        XCTAssertEqual(codexSwatchForeground.green, lightUserBubble.green, accuracy: 0.001)
-        XCTAssertEqual(codexSwatchForeground.blue, lightUserBubble.blue, accuracy: 0.001)
+        XCTAssertEqual(codexSwatchForeground.red, lightAccent.red, accuracy: 0.001)
+        XCTAssertEqual(codexSwatchForeground.green, lightAccent.green, accuracy: 0.001)
+        XCTAssertEqual(codexSwatchForeground.blue, lightAccent.blue, accuracy: 0.001)
 
         // 深色中性色只允许轻微冷调，不再出现棕色或灰紫色覆盖整个界面。
         assertRGB(darkBackground, red: 16, green: 17, blue: 20)
@@ -228,9 +228,9 @@ final class ThemeStoreTests: XCTestCase {
         XCTAssertGreaterThan(darkSuccess.green, darkSuccess.red)
         XCTAssertGreaterThan(darkSuccess.green, darkSuccess.blue)
 
-        XCTAssertGreaterThan(darkUserBubble.red, darkBackground.red + 0.15)
-        XCTAssertGreaterThan(darkUserBubble.green, darkBackground.green + 0.10)
-        XCTAssertGreaterThan(darkUserBubble.blue, darkBackground.blue + 0.15)
+        XCTAssertEqual(darkUserBubble.red, darkElevatedSurface.red, accuracy: 0.001)
+        XCTAssertEqual(darkUserBubble.green, darkElevatedSurface.green, accuracy: 0.001)
+        XCTAssertEqual(darkUserBubble.blue, darkElevatedSurface.blue, accuracy: 0.001)
         XCTAssertGreaterThan(darkUserBubble.alpha, 0.99)
     }
 
@@ -413,8 +413,8 @@ final class ResponsiveLayoutTests: XCTestCase {
         ))
         XCTAssertTrue(layout.prefersDetailOnly)
         XCTAssertFalse(layout.usesAttachedInspector)
-        XCTAssertLessThanOrEqual(layout.titleMaxWidth, 150)
-        XCTAssertGreaterThanOrEqual(layout.titleMaxWidth, 86)
+        XCTAssertLessThanOrEqual(layout.titleMaxWidth, 230)
+        XCTAssertGreaterThanOrEqual(layout.titleMaxWidth, 160)
     }
 
     func testWorkbenchLayoutUsesCompactNavigationOnLegacyIPadMiniPortraitWidth() {
@@ -447,7 +447,7 @@ final class ResponsiveLayoutTests: XCTestCase {
         XCTAssertEqual(layout.horizontalInset, 16)
         XCTAssertEqual(layout.composerAvailableWidth, 358)
         XCTAssertEqual(layout.composerMaxWidth, .infinity)
-        XCTAssertEqual(layout.composerBottomPadding, 8)
+        XCTAssertEqual(layout.composerBottomPadding, 0)
         XCTAssertLessThanOrEqual(layout.userBubbleMaxWidth, 354)
         XCTAssertLessThanOrEqual(layout.assistantBubbleMaxWidth, 354)
         XCTAssertLessThanOrEqual(layout.runtimeCardMaxWidth, 366)
@@ -466,7 +466,7 @@ final class ResponsiveLayoutTests: XCTestCase {
         let layout = ConversationLayout(containerWidth: 716, horizontalSizeClass: .regular)
 
         XCTAssertEqual(layout.composerTopPadding, 12)
-        XCTAssertEqual(layout.composerBottomPadding, 10)
+        XCTAssertEqual(layout.composerBottomPadding, 8)
     }
 
     func testConversationLayoutGivesWidePadComposerMoreWorkingRoom() {

@@ -246,9 +246,88 @@ extension QueuedTurnEntry {
     }
 }
 
+enum ComposerStatusTrayMaterialStrength: Equatable {
+    case opaque
+    case thin
+    case regular
+}
+
+struct ComposerStatusTraySurfaceStyle: Equatable {
+    let materialStrength: ComposerStatusTrayMaterialStrength
+    let surfaceTintOpacity: Double
+    let innerSurfaceOpacity: Double
+    let controlSurfaceOpacity: Double
+    let borderOpacity: Double
+    let accentBorderOpacity: Double
+    let accentBorderWidth: Double
+    let shadowOpacity: Double
+    let shadowRadius: Double
+    let shadowYOffset: Double
+
+    static func resolve(
+        isExpanded: Bool,
+        scheme: ThemeResolvedScheme,
+        reduceTransparency: Bool
+    ) -> Self {
+        let borderOpacity: Double
+        let shadowOpacity: Double
+        switch scheme {
+        case .light:
+            borderOpacity = isExpanded ? 0.96 : 0.86
+            shadowOpacity = isExpanded ? 0.12 : 0.08
+        case .dark:
+            borderOpacity = isExpanded ? 0.90 : 0.80
+            shadowOpacity = isExpanded ? 0.34 : 0.24
+        }
+
+        guard !reduceTransparency else {
+            return Self(
+                materialStrength: .opaque,
+                surfaceTintOpacity: 1,
+                innerSurfaceOpacity: 1,
+                controlSurfaceOpacity: 1,
+                borderOpacity: borderOpacity,
+                accentBorderOpacity: isExpanded ? 0.42 : 0.30,
+                accentBorderWidth: isExpanded ? 1 : 0.75,
+                shadowOpacity: shadowOpacity,
+                shadowRadius: isExpanded ? 18 : 12,
+                shadowYOffset: isExpanded ? 7 : 4
+            )
+        }
+
+        let surfaceTintOpacity: Double
+        let innerSurfaceOpacity: Double
+        let controlSurfaceOpacity: Double
+        switch scheme {
+        case .light:
+            surfaceTintOpacity = isExpanded ? 0.76 : 0.68
+            innerSurfaceOpacity = isExpanded ? 0.90 : 0.84
+            controlSurfaceOpacity = isExpanded ? 0.94 : 0.88
+        case .dark:
+            surfaceTintOpacity = isExpanded ? 0.82 : 0.72
+            innerSurfaceOpacity = isExpanded ? 0.94 : 0.88
+            controlSurfaceOpacity = isExpanded ? 0.96 : 0.92
+        }
+
+        return Self(
+            materialStrength: isExpanded ? .regular : .thin,
+            surfaceTintOpacity: surfaceTintOpacity,
+            innerSurfaceOpacity: innerSurfaceOpacity,
+            controlSurfaceOpacity: controlSurfaceOpacity,
+            borderOpacity: borderOpacity,
+            accentBorderOpacity: isExpanded ? 0.42 : 0.30,
+            accentBorderWidth: isExpanded ? 1 : 0.75,
+            shadowOpacity: shadowOpacity,
+            shadowRadius: isExpanded ? 18 : 12,
+            shadowYOffset: isExpanded ? 7 : 4
+        )
+    }
+}
+
 struct ComposerStatusTray: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     let sessionControlNotice: String?
     let quotaNotice: CodexQuotaNotice?
@@ -269,6 +348,8 @@ struct ComposerStatusTray: View {
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
         let tint = trayTint(tokens: tokens)
+        let surfaceStyle = surfaceStyle(tokens: tokens)
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
 
         VStack(alignment: .leading, spacing: isGoalExpanded ? 8 : 0) {
             // 展开态把状态内容和收起按钮放到同一行，避免先出现一整行空白按钮区。
@@ -292,11 +373,23 @@ struct ComposerStatusTray: View {
         // 状态栏和输入卡共用同一条 composer 轨道；展开后也不要另设宽度上限，
         // 否则 iPad 宽屏下会出现上窄下宽、左右边界不一致的视觉断层。
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(tint.opacity(0.28))
+        .background {
+            traySurface(shape: shape, tokens: tokens, surfaceStyle: surfaceStyle)
         }
+        .overlay {
+            ZStack {
+                shape.strokeBorder(tokens.border.opacity(surfaceStyle.borderOpacity), lineWidth: 0.75)
+                shape.strokeBorder(
+                    tint.opacity(surfaceStyle.accentBorderOpacity),
+                    lineWidth: surfaceStyle.accentBorderWidth
+                )
+            }
+        }
+        .shadow(
+            color: Color.black.opacity(surfaceStyle.shadowOpacity),
+            radius: surfaceStyle.shadowRadius,
+            y: surfaceStyle.shadowYOffset
+        )
         .accessibilityElement(children: .contain)
     }
 
@@ -386,10 +479,10 @@ struct ComposerStatusTray: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
-        .background(tokens.surface.opacity(0.74), in: Capsule())
+        .background(tokens.surface.opacity(surfaceStyle(tokens: tokens).innerSurfaceOpacity), in: Capsule())
         .overlay {
             Capsule()
-                .strokeBorder(tint.opacity(0.18))
+                .strokeBorder(tint.opacity(isGoalExpanded ? 0.28 : 0.20))
         }
         .accessibilityElement(children: .combine)
     }
@@ -486,6 +579,17 @@ struct ComposerStatusTray: View {
                 .font(themeStore.uiFont(.caption, weight: .semibold))
                 .foregroundStyle(tokens.primaryText)
                 .lineLimit(3)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    tokens.surface.opacity(surfaceStyle(tokens: tokens).innerSurfaceOpacity),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(tokens.border.opacity(surfaceStyle(tokens: tokens).borderOpacity))
+                }
 
             if let progress = goal.budgetProgressFraction {
                 ProgressView(value: progress)
@@ -550,10 +654,13 @@ struct ComposerStatusTray: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .frame(minWidth: minWidth, minHeight: 38)
-            .background(tokens.surface.opacity(0.74), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                tokens.surface.opacity(surfaceStyle(tokens: tokens).innerSurfaceOpacity),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(tint.opacity(0.18))
+                    .strokeBorder(tint.opacity(isGoalExpanded ? 0.28 : 0.20))
             }
             .layoutPriority(layoutPriority)
     }
@@ -587,15 +694,19 @@ struct ComposerStatusTray: View {
         isDisabled: Bool,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let tokens = themeStore.tokens(for: colorScheme)
+        return Button(action: action) {
             Image(systemName: systemImage)
                 .font(themeStore.uiFont(size: 13, weight: .semibold))
-                .foregroundStyle(isDisabled ? themeStore.tokens(for: colorScheme).tertiaryText : tint)
+                .foregroundStyle(isDisabled ? tokens.tertiaryText : tint)
                 .frame(width: 30, height: 30)
-                .background(themeStore.tokens(for: colorScheme).elevatedSurface.opacity(0.78), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    tokens.elevatedSurface.opacity(surfaceStyle(tokens: tokens).controlSurfaceOpacity),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(themeStore.tokens(for: colorScheme).border.opacity(0.72))
+                        .strokeBorder(tokens.border.opacity(surfaceStyle(tokens: tokens).borderOpacity))
                 }
         }
         .buttonStyle(.plain)
@@ -627,6 +738,41 @@ struct ComposerStatusTray: View {
             return goalStatusTint(goal, tokens: tokens)
         }
         return tokens.secondaryText
+    }
+
+    @ViewBuilder
+    private func traySurface(
+        shape: RoundedRectangle,
+        tokens: ThemeTokens,
+        surfaceStyle: ComposerStatusTraySurfaceStyle
+    ) -> some View {
+        switch surfaceStyle.materialStrength {
+        case .opaque:
+            shape.fill(tokens.surface)
+        case .regular:
+            // 展开态承载长目标、指标和操作，使用更厚的模糊并提高 tint，
+            // 后方内容只保留层级线索，不能继续形成可读的第二层文字。
+            shape
+                .fill(.regularMaterial)
+                .overlay {
+                    shape.fill(tokens.surface.opacity(surfaceStyle.surfaceTintOpacity))
+                }
+        case .thin:
+            // 收起态保留少量背景感知，但仍必须是一块独立表面。
+            shape
+                .fill(.thinMaterial)
+                .overlay {
+                    shape.fill(tokens.surface.opacity(surfaceStyle.surfaceTintOpacity))
+                }
+        }
+    }
+
+    private func surfaceStyle(tokens: ThemeTokens) -> ComposerStatusTraySurfaceStyle {
+        ComposerStatusTraySurfaceStyle.resolve(
+            isExpanded: isGoalExpanded,
+            scheme: tokens.resolvedScheme,
+            reduceTransparency: reduceTransparency
+        )
     }
 
     private func goalStatusTint(_ goal: ThreadGoal, tokens: ThemeTokens) -> Color {

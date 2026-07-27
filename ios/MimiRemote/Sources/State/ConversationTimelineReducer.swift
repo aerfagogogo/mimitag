@@ -80,13 +80,20 @@ struct ConversationTimelineReducer {
             consumedCurrentIndices.insert(currentIndex)
         }
 
-        // 老 gateway 可能不给 client_message_id；只允许“未确认本地回显”与唯一、近时间同文历史合并。
+        // 老 Claude bridge 或 bridge 重启后的 JSONL 历史可能不给 client_message_id。
+        // 未确认回显沿用旧兼容逻辑；已确认消息只允许带本地 client ID 的 user 气泡
+        // 与唯一、近时间、且缺 client ID 的历史合并，避免误吞用户刻意发送的重复内容。
         for snapshotIndex in snapshot.indices where matchedCurrentBySnapshotIndex[snapshotIndex] == nil {
             let history = snapshot[snapshotIndex]
             let candidates = current.indices.filter { index in
                 guard !consumedCurrentIndices.contains(index) else { return false }
                 let local = current[index]
-                return local.sendStatus != .confirmed
+                let isUnconfirmedLocalEcho = local.sendStatus != .confirmed
+                let isConfirmedLegacyClaudeEcho = local.sendStatus == .confirmed
+                    && local.role == .user
+                    && local.clientMessageID != nil
+                    && history.clientMessageID == nil
+                return (isUnconfirmedLocalEcho || isConfirmedLegacyClaudeEcho)
                     && local.role == history.role
                     && local.content == history.content
                     && abs(local.createdAt.timeIntervalSince(history.createdAt)) <= 10 * 60
@@ -162,7 +169,8 @@ struct ConversationTimelineReducer {
             let left = nodes[pair.0]
             let right = nodes[pair.1]
             // 两端都来自 snapshot 时由服务端顺序裁决；只保留含本地专属 Item 的首次出现约束。
-            if left.snapshotIndex == nil || right.snapshotIndex == nil {
+            if (left.snapshotIndex == nil || right.snapshotIndex == nil),
+               !currentAdjacencyConflictsWithInjectedUser(left: left, right: right) {
                 addEdge(pair.0, pair.1)
             }
         }
@@ -203,6 +211,22 @@ struct ConversationTimelineReducer {
             ambiguousAliasCount: ambiguousAliasCount,
             hadOrderingCycle: hadOrderingCycle
         )
+    }
+
+    private func currentAdjacencyConflictsWithInjectedUser(left: Node, right: Node) -> Bool {
+        guard left.snapshotIndex == nil,
+              right.snapshotIndex != nil,
+              right.message.role == .user,
+              right.message.userDelivery == .injected,
+              !left.message.isTimestampFallback,
+              !right.message.isTimestampFallback else {
+            return false
+        }
+        // 省流/部分历史可能已经确认中途 steer 用户消息，却暂时缺少其后的实时回复。
+        // 如果旧列表把这些回复留在用户消息前面，继续保留首次槽位会形成
+        // “Agent 先回答、用户后提问”。只在双方时间都可靠时放弃这条旧相邻约束，
+        // 随后的拓扑排序即可按真实发送时间把用户消息插回正确位置。
+        return right.message.createdAt < left.message.createdAt
     }
 
     private func deduplicatedSnapshot(_ snapshot: [ConversationMessage]) -> [ConversationMessage] {

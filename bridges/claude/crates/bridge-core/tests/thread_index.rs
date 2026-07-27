@@ -371,6 +371,55 @@ async fn open_and_hydrate_inserts_new_rows_only() {
 }
 
 #[tokio::test]
+async fn remove_many_persists_once() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("threads.json");
+    let index: Arc<ThreadIndex<Stub>> = ThreadIndex::open_at(path.clone()).await.unwrap();
+    index
+        .insert(entry("visible", "/p", 100, 200, false))
+        .await
+        .unwrap();
+    index
+        .insert(entry("remove", "/p", 100, 100, false))
+        .await
+        .unwrap();
+
+    assert_eq!(index.remove_many(&["remove".to_string()]).await.unwrap(), 1);
+    drop(index);
+
+    let reopened: Arc<ThreadIndex<Stub>> = ThreadIndex::open_at(path).await.unwrap();
+    assert!(reopened.lookup("remove").await.is_none());
+    assert!(reopened.lookup("visible").await.is_some());
+}
+
+#[tokio::test]
+async fn upsert_many_persists_insertions_and_replacements() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("threads.json");
+    let index: Arc<ThreadIndex<Stub>> = ThreadIndex::open_at(path.clone()).await.unwrap();
+    index
+        .insert(entry("replace", "/old", 100, 100, false))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        index
+            .upsert_many(vec![
+                entry("replace", "/new", 100, 200, false),
+                entry("insert", "/new", 100, 200, false),
+            ])
+            .await
+            .unwrap(),
+        2
+    );
+    drop(index);
+
+    let reopened: Arc<ThreadIndex<Stub>> = ThreadIndex::open_at(path).await.unwrap();
+    assert_eq!(reopened.lookup("replace").await.unwrap().cwd, "/new");
+    assert!(reopened.lookup("insert").await.is_some());
+}
+
+#[tokio::test]
 async fn set_forked_from_id_persists() {
     let dir = TempDir::new().unwrap();
     let index: Arc<ThreadIndex<Stub>> = ThreadIndex::open_at(dir.path().join("t.json"))

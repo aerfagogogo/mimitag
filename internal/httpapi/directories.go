@@ -62,6 +62,10 @@ func (r *Router) directoryListHandler(w http.ResponseWriter, req *http.Request) 
 	realPath := scope.realPath
 	stat, err := os.Stat(realPath)
 	if err != nil {
+		if msg, ok := pathAccessDeniedMessage(err); ok {
+			writeError(w, http.StatusForbidden, msg)
+			return
+		}
 		writeError(w, http.StatusForbidden, "路径不在允许范围内或不可访问")
 		return
 	}
@@ -71,6 +75,10 @@ func (r *Router) directoryListHandler(w http.ResponseWriter, req *http.Request) 
 	}
 	dirEntries, err := os.ReadDir(realPath)
 	if err != nil {
+		if msg, ok := pathAccessDeniedMessage(err); ok {
+			writeError(w, http.StatusForbidden, msg)
+			return
+		}
 		writeError(w, http.StatusForbidden, "路径不在允许范围内或不可访问")
 		return
 	}

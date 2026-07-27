@@ -24,6 +24,15 @@ exception_reason() {
     ios/MimiRemote/Sources/Core/Models/AgentModels.swift)
       printf '%s' '跨版本协议兼容模型集合，后续按会话、工具和账户模型拆分'
       ;;
+    internal/httpapi/appserver_gateway_test.go)
+      printf '%s' 'App Server 网关回归矩阵，后续按鉴权、会话和历史消息场景拆分'
+      ;;
+    ios/MimiRemote/Sources/State/SessionStoreConnection.swift)
+      printf '%s' '会话连接、事件归并与本地状态兼容逻辑，后续按连接生命周期和状态职责拆分'
+      ;;
+    ios/MimiRemote/Sources/State/SessionStoreHistory.swift)
+      printf '%s' '会话创建、历史加载与列表恢复逻辑，后续按历史分页、列表和恢复职责拆分'
+      ;;
     *) return 1 ;;
   esac
 }

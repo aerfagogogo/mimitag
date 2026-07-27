@@ -1,4 +1,114 @@
+import AVFoundation
 import SwiftUI
+
+enum ConnectionQRCodeScanIntent: Equatable, Identifiable {
+    case initialConnection
+    case addConnectionProfile
+    case repairCurrentProfile(expectedProfileID: String)
+
+    var id: String {
+        switch self {
+        case .initialConnection:
+            return "initialConnection"
+        case .addConnectionProfile:
+            return "addConnectionProfile"
+        case .repairCurrentProfile(let expectedProfileID):
+            return "repairCurrentProfile:\(expectedProfileID)"
+        }
+    }
+
+    var addsConnectionProfile: Bool {
+        self == .addConnectionProfile
+    }
+
+    func isValid(activeProfileID: String?) -> Bool {
+        switch self {
+        case .initialConnection:
+            return activeProfileID == nil
+        case .addConnectionProfile:
+            return true
+        case .repairCurrentProfile(let expectedProfileID):
+            return activeProfileID == expectedProfileID
+        }
+    }
+}
+
+@MainActor
+final class ConnectionQRCodeScannerPresentation: ObservableObject {
+    typealias SubmissionHandler = (
+        _ rawValue: String,
+        _ intent: ConnectionQRCodeScanIntent
+    ) async -> QRCodeScannerSubmissionResult
+
+    @Published var intent: ConnectionQRCodeScanIntent?
+    @Published private(set) var isRequestingCameraAuthorization = false
+
+    private var submissionHandler: SubmissionHandler?
+    private var manualConnectionHandler: ((ConnectionQRCodeScanIntent) -> Void)?
+    private var dismissalHandler: (() -> Void)?
+
+    func configure(
+        onSubmit: @escaping SubmissionHandler,
+        onChooseManualConnection: @escaping (ConnectionQRCodeScanIntent) -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
+        submissionHandler = onSubmit
+        manualConnectionHandler = onChooseManualConnection
+        dismissalHandler = onDismiss
+    }
+
+    func request(_ requestedIntent: ConnectionQRCodeScanIntent) {
+        guard !isRequestingCameraAuthorization else {
+            return
+        }
+
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined else {
+            intent = requestedIntent
+            return
+        }
+
+        // 这里必须由 SettingsView 持有的引用对象承接回调。系统权限弹窗期间 Form
+        // 可能重建 Section；若回调只写 Section 自己的 @State，结果会落到已经失效的
+        // 视图实例上，首次扫码便不会继续展示 Sheet。
+        isRequestingCameraAuthorization = true
+        AVCaptureDevice.requestAccess(for: .video) { [weak self] _ in
+            // 权限回调会早于系统弹窗的 dismiss 动画结束。若同一帧设置 sheet item，
+            // UIKit 会拒绝新的 presenter，但绑定已经变成非 nil，SwiftUI 之后也不会
+            // 再尝试。留出一个很短的系统过渡窗口，再提交唯一一次呈现状态。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                guard let self else {
+                    return
+                }
+                self.isRequestingCameraAuthorization = false
+                if self.intent == nil {
+                    self.intent = requestedIntent
+                }
+            }
+        }
+    }
+
+    func dismiss() {
+        intent = nil
+    }
+
+    func chooseManualConnection(for intent: ConnectionQRCodeScanIntent) {
+        manualConnectionHandler?(intent)
+    }
+
+    func submit(
+        _ rawValue: String,
+        intent: ConnectionQRCodeScanIntent
+    ) async -> QRCodeScannerSubmissionResult {
+        guard let submissionHandler else {
+            return .rejected(L10n.text("ui.the_connection_was_not_completed_please_confirm_that"))
+        }
+        return await submissionHandler(rawValue, intent)
+    }
+
+    func didDismiss() {
+        dismissalHandler?()
+    }
+}
 
 // 首次连接流程按功能区拆出，主设置页只负责导航和页面编排。
 struct InitialConnectionSettingsSections: View {
@@ -6,11 +116,12 @@ struct InitialConnectionSettingsSections: View {
     @EnvironmentObject private var appStore: AppStore
     @EnvironmentObject private var sessionStore: SessionStore
     @EnvironmentObject private var themeStore: ThemeStore
+    @ObservedObject var qrScannerPresentation: ConnectionQRCodeScannerPresentation
 
     @State private var endpoint = ""
     @State private var token = ""
     @State private var didLoadInitialConnection = false
-    @State private var isShowingQRCodeScanner = false
+    @State private var pendingManualConnectionIntent: ConnectionQRCodeScanIntent?
     @State private var isSavingConnection = false
     @State private var isAddingConnectionProfile = false
     @State private var profileDisplayName = ""
@@ -59,29 +170,25 @@ struct InitialConnectionSettingsSections: View {
                 }
 #endif
                 if !appStore.isConfigured && !appStore.localAgentDetected {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Label(L10n.text("ui.start_mimi_assistant_on_mac_first"), systemImage: "desktopcomputer")
-                            .font(themeStore.uiFont(.body, weight: .semibold))
-                        Text("agentd up")
-                            .font(.system(.callout, design: .monospaced, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                    MacInstallationSetupView(
+                        isScanDisabled: isSavingConnection || qrScannerPresentation.isRequestingCameraAuthorization,
+                        onScan: beginScanningMac
+                    )
+                } else {
+                    Button {
+                        beginScanningMac()
+                    } label: {
+                        Label(primaryScanButtonTitle, systemImage: "qrcode.viewfinder")
+                            .frame(maxWidth: .infinity)
                     }
-                    .padding(.vertical, 2)
+                    .buttonStyle(.borderedProminent)
+                    .tint(tokens.primaryAction)
+                    .controlSize(.large)
+                    .disabled(isSavingConnection || qrScannerPresentation.isRequestingCameraAuthorization)
+                    .accessibilityIdentifier("settings.connection.scanQRCode")
                 }
 
-                Button {
-                    beginScanningMac()
-                } label: {
-                    Label(primaryScanButtonTitle, systemImage: "qrcode.viewfinder")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(tokens.primaryAction)
-                .controlSize(.large)
-                .disabled(isSavingConnection)
-
-                DisclosureGroup(L10n.text("ui.mac_preparation")) {
+                DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(L10n.text("ui.first_time_installation"))
                             .font(themeStore.uiFont(.caption, weight: .semibold))
@@ -100,6 +207,11 @@ struct InitialConnectionSettingsSections: View {
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 6)
+                } label: {
+                    Label(
+                        L10n.text("ui.command_line_installation_advanced"),
+                        systemImage: "terminal"
+                    )
                 }
 
                 DisclosureGroup(isExpanded: manualConnectionExpandedBinding) {
@@ -142,21 +254,13 @@ struct InitialConnectionSettingsSections: View {
                     Label(manualConnectionTitle, systemImage: "keyboard")
                 }
             } header: {
-                Text(appStore.isConfigured ? L10n.text("ui.add_mac") : L10n.text("ui.connect_to_mac"))
+                Text(appStore.isConfigured ? L10n.text("ui.add_mac") : L10n.text("ui.start_setup"))
             } footer: {
-                Text(L10n.text("ui.it_is_recommended_to_scan_the_qr_code"))
+                Text(connectionSectionFooter)
             }
-            // Form 会把透明 Group 展开成多个 Section。所有弹窗必须挂在这个始终存在的
-            // 具体 Section 上，确保已连接时新增的“已保存/状态”Section 不会生成多个 presenter。
-            .sheet(isPresented: $isShowingQRCodeScanner) {
-                QRCodeScannerSheet(onDismiss: {
-                    isShowingQRCodeScanner = false
-                }, onChooseManualConnection: {
-                    isShowingAdvancedManualConnection = true
-                }) { rawValue in
-                    await applyScannedConnection(rawValue)
-                }
-            }
+            // 这里注册业务回调；真正的相机 Cover 由 SettingsView 根层呈现，避免
+            // 系统权限弹窗期间 Form.Section 重建后丢失 presenter。
+            .onAppear(perform: configureQRCodeScannerPresentation)
             .sheet(item: $profileRenameTarget) { profile in
                 ConnectionProfileRenameSheet(profile: profile) { displayName in
                     try appStore.renameConnectionProfile(id: profile.id, displayName: displayName)
@@ -243,6 +347,7 @@ struct InitialConnectionSettingsSections: View {
                 } label: {
                     Label(L10n.text("ui.debug_enter_the_workbench"), systemImage: "wrench.and.screwdriver")
                 }
+                .accessibilityIdentifier("settings.debugEnterWorkbench")
             }
 #endif
         }
@@ -288,6 +393,13 @@ struct InitialConnectionSettingsSections: View {
 
     private var primaryScanButtonTitle: String {
         appStore.isConfigured ? L10n.text("ui.scan_qr_code_to_add_mac") : L10n.text("ui.scan_the_qr_code_to_connect")
+    }
+
+    private var connectionSectionFooter: String {
+        if !appStore.isConfigured && !appStore.localAgentDetected {
+            return L10n.text("ui.pairing_information_only_transmitted_between_your_devices")
+        }
+        return L10n.text("ui.it_is_recommended_to_scan_the_qr_code")
     }
 
     private var localAgentPairingHint: String {
@@ -413,6 +525,7 @@ struct InitialConnectionSettingsSections: View {
                     Button(L10n.text("ui.scan_the_qr_code_again_to_pair")) {
                         beginRepairingCurrentProfile()
                     }
+                    .accessibilityIdentifier("settings.connection.repairQRCode")
                     Divider()
                     Button(L10n.text("ui.forget_this_mac"), role: .destructive) {
                         pendingRemovalConfirmation = .forgettingCurrent(item.profile)
@@ -811,27 +924,67 @@ struct InitialConnectionSettingsSections: View {
     }
 
     private func beginScanningMac() {
-        if appStore.activeConnectionProfile != nil {
-            prepareAddingConnectionProfile()
-        } else {
+        let intent: ConnectionQRCodeScanIntent = appStore.activeConnectionProfile == nil
+            ? .initialConnection
+            : .addConnectionProfile
+        pendingManualConnectionIntent = nil
+        qrScannerPresentation.request(intent)
+    }
+
+    private func configureQRCodeScannerPresentation() {
+        qrScannerPresentation.configure(
+            onSubmit: { rawValue, intent in
+                await applyScannedConnection(rawValue, intent: intent)
+            },
+            onChooseManualConnection: { intent in
+                pendingManualConnectionIntent = intent
+            },
+            onDismiss: finishQRCodeScannerPresentation
+        )
+    }
+
+    private func beginRepairingCurrentProfile() {
+        guard let activeProfileID = appStore.activeConnectionProfileID else {
+            localError = L10n.text("ui.the_current_mac_has_changed_please_try_again")
+            return
+        }
+        pendingManualConnectionIntent = nil
+        qrScannerPresentation.request(
+            .repairCurrentProfile(expectedProfileID: activeProfileID)
+        )
+    }
+
+    private func finishQRCodeScannerPresentation() {
+        defer {
+            pendingManualConnectionIntent = nil
+        }
+        guard let intent = pendingManualConnectionIntent else {
+            isShowingAdvancedManualConnection = false
+            return
+        }
+        guard intent.isValid(activeProfileID: appStore.activeConnectionProfileID) else {
+            localError = L10n.text("ui.the_current_mac_has_changed_please_try_again")
+            isShowingAdvancedManualConnection = false
+            return
+        }
+
+        switch intent {
+        case .initialConnection:
             isAddingConnectionProfile = false
             profileDisplayName = ""
             endpoint = ""
             token = ""
             localError = nil
+        case .addConnectionProfile:
+            prepareAddingConnectionProfile()
+        case .repairCurrentProfile:
+            isAddingConnectionProfile = false
+            profileDisplayName = appStore.activeConnectionProfile?.displayName ?? ""
+            endpoint = appStore.endpoint
+            token = ""
+            localError = nil
         }
-        isShowingAdvancedManualConnection = false
-        isShowingQRCodeScanner = true
-    }
-
-    private func beginRepairingCurrentProfile() {
-        isAddingConnectionProfile = false
-        profileDisplayName = appStore.activeConnectionProfile?.displayName ?? ""
-        endpoint = appStore.endpoint
-        token = ""
-        localError = nil
-        isShowingAdvancedManualConnection = false
-        isShowingQRCodeScanner = true
+        isShowingAdvancedManualConnection = true
     }
 
     private func switchConnectionProfile(id: String) async {
@@ -921,19 +1074,28 @@ struct InitialConnectionSettingsSections: View {
         }
     }
 
-    private func applyScannedConnection(_ rawValue: String) async -> QRCodeScannerSubmissionResult {
+    private func applyScannedConnection(
+        _ rawValue: String,
+        intent: ConnectionQRCodeScanIntent
+    ) async -> QRCodeScannerSubmissionResult {
         isSavingConnection = true
+        guard intent.isValid(activeProfileID: appStore.activeConnectionProfileID) else {
+            isSavingConnection = false
+            let message = L10n.text("ui.the_current_mac_has_changed_please_try_again")
+            localError = message
+            return .rejected(message)
+        }
         do {
             let wasConfigured = appStore.isConfigured
             let raw = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let url = URL(string: raw) else {
                 throw PairingLinkError.unsupportedURL
             }
-            let wasAddingConnectionProfile = isAddingConnectionProfile
+            let wasAddingConnectionProfile = intent.addsConnectionProfile
             if wasAddingConnectionProfile {
                 _ = try await sessionStore.addConnectionProfile(
                     pairingURL: url,
-                    displayName: profileDisplayName
+                    displayName: ""
                 )
             } else {
                 _ = try await sessionStore.applyPairingURL(url)

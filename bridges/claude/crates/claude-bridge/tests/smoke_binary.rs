@@ -97,7 +97,8 @@ async fn binary_stdio_initialize_thread_start_turn_start() {
             "method": "turn/start",
             "params": {
                 "threadId": thread_id,
-                "input": [{"type": "text", "text": "say hi"}]
+                "input": [{"type": "text", "text": "say hi"}],
+                "clientUserMessageId": "client-smoke-binary"
             }
         }),
     )
@@ -105,6 +106,7 @@ async fn binary_stdio_initialize_thread_start_turn_start() {
 
     let mut saw_completed = false;
     let mut saw_response = false;
+    let mut saw_client_message_id = false;
     for _ in 0..200 {
         let frame = next_frame(&mut stdout).await;
         if frame.get("id").and_then(|v| v.as_u64()) == Some(3) {
@@ -117,7 +119,19 @@ async fn binary_stdio_initialize_thread_start_turn_start() {
         if frame.get("method").and_then(|v| v.as_str()) == Some("turn/completed") {
             saw_completed = true;
         }
-        if saw_completed && saw_response {
+        if frame.get("method").and_then(|v| v.as_str()) == Some("item/completed")
+            && frame.pointer("/params/item/type").and_then(Value::as_str) == Some("userMessage")
+        {
+            assert_eq!(
+                frame
+                    .pointer("/params/item/clientId")
+                    .and_then(Value::as_str),
+                Some("client-smoke-binary"),
+                "userMessage lifecycle must preserve clientUserMessageId: {frame}"
+            );
+            saw_client_message_id = true;
+        }
+        if saw_completed && saw_response && saw_client_message_id {
             break;
         }
     }
@@ -125,6 +139,40 @@ async fn binary_stdio_initialize_thread_start_turn_start() {
     assert!(
         saw_completed,
         "expected a turn/completed notification before timeout"
+    );
+    assert!(
+        saw_client_message_id,
+        "expected userMessage.clientId to survive the binary JSON-RPC boundary"
+    );
+
+    // thread/read 必须继续返回同一个 clientId；这正是 iOS 刷新历史时
+    // 将本地气泡与服务端快照合并为同一条消息的稳定键。
+    write_frame(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "thread/read",
+            "params": {"threadId": thread_id, "includeTurns": true}
+        }),
+    )
+    .await;
+    let read = await_response(&mut stdout, 4).await;
+    let history_user_message = read
+        .pointer("/result/thread/turns")
+        .and_then(Value::as_array)
+        .and_then(|turns| {
+            turns
+                .iter()
+                .filter_map(|turn| turn.get("items").and_then(Value::as_array))
+                .flatten()
+                .find(|item| item.get("type").and_then(Value::as_str) == Some("userMessage"))
+        })
+        .expect("thread/read should contain the userMessage");
+    assert_eq!(
+        history_user_message.get("clientId").and_then(Value::as_str),
+        Some("client-smoke-binary"),
+        "thread/read must preserve the client ID used by iOS history rebase: {read}"
     );
 
     // Clean exit: drop stdin → bridge sees EOF → child exits.

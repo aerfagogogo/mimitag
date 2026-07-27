@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 #[cfg(unix)]
@@ -17,8 +18,34 @@ use crate::envelope::{
 };
 use crate::framing::{read_json_line, write_json_line};
 use crate::notify::NotificationSender;
-use crate::session::{AttachHandle, Session, SessionRegistry, SessionRegistryConfig};
+use crate::session::{
+    AgentId, AttachHandle, AttachKind, ResolvedAttach, Session, SessionRegistry,
+    SessionRegistryConfig,
+};
 use crate::state::Capabilities;
+
+/// Method of the optional transport-level preamble a socket client sends as
+/// its very first line to claim a named, daemon-lifetime session and resume
+/// from a cursor. Underscore-prefixed like `_alleycat_seq` to keep it clearly
+/// out of the bridge's own JSON-RPC surface.
+pub const ATTACH_METHOD: &str = "_alleycat/attach";
+
+/// Method of the ack the server writes back before any replayed frame, so the
+/// client learns whether it resumed and how far the ring reaches.
+pub const ATTACHED_METHOD: &str = "_alleycat/attached";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachParams {
+    /// Client-chosen key identifying which session to resume. Distinct keys
+    /// get distinct sessions; reusing a key is what makes replay possible.
+    session_key: String,
+    /// Highest seq the client has durably handed to its own consumer. `None`
+    /// lets the registry auto-resume from the previous drainer's high-water
+    /// mark.
+    #[serde(default)]
+    last_seen: Option<u64>,
+}
 
 /// Per-stream context handed to bridge handlers. Wraps the session so
 /// handlers can emit notifications, issue server→client requests, and read
@@ -113,8 +140,20 @@ pub trait Bridge: Send + Sync + 'static {
 pub struct ServerOptions {
     pub socket_path: PathBuf,
     pub unlink_stale: bool,
+    /// Agent half of the session key. One socket server serves one agent.
+    pub agent: AgentId,
+    pub registry: SessionRegistryConfig,
 }
 
+/// Serve a Unix socket for the lifetime of the process, with sessions that
+/// outlive any one connection.
+///
+/// This is what makes a resident bridge worth running: the registry, the
+/// replay rings and the outstanding server-request tables all live as long as
+/// the listener, so a client whose socket drops mid-turn can reconnect, send
+/// [`ATTACH_METHOD`] with the same `sessionKey`, and pick the stream back up
+/// where it left off. Connections that send no preamble keep the old
+/// one-shot behaviour.
 #[cfg(unix)]
 pub async fn serve_unix<B>(bridge: Arc<B>, options: ServerOptions) -> anyhow::Result<()>
 where
@@ -122,15 +161,114 @@ where
 {
     bind_unix_socket(&options.socket_path, options.unlink_stale)?;
     let listener = UnixListener::bind(&options.socket_path)?;
+    let registry = SessionRegistry::new(options.registry.clone());
+    // Reaps sessions whose client never came back: cancels their outstanding
+    // approval prompts after `pending_grace`, drops them after `idle_ttl`.
+    let _reaper = registry.spawn_reaper();
+    let agent = options.agent;
     loop {
         let (stream, _) = listener.accept().await?;
         let bridge = Arc::clone(&bridge);
+        let registry = Arc::clone(&registry);
         tokio::spawn(async move {
-            if let Err(error) = serve_stream(bridge, stream).await {
+            if let Err(error) = serve_stream_attached(bridge, stream, &registry, agent).await {
                 debug!("bridge connection ended: {error:#}");
             }
         });
     }
+}
+
+/// Drive a stream that may open with an [`ATTACH_METHOD`] preamble.
+///
+/// With a preamble the stream is bound to the registry session named by
+/// `sessionKey`, an ack is written before anything else, and the session
+/// survives the stream. Without one the stream gets an isolated session that
+/// never enters the registry — identical to [`serve_stream`], including
+/// cancelling pending server-requests on close.
+pub async fn serve_stream_attached<B, S>(
+    bridge: Arc<B>,
+    stream: S,
+    registry: &Arc<SessionRegistry>,
+    agent: AgentId,
+) -> anyhow::Result<()>
+where
+    B: Bridge + ?Sized,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut reader = BufReader::new(reader);
+
+    // The preamble is positional, so we have to read a frame before we know
+    // whether it is one. A non-preamble first frame is replayed into the
+    // dispatcher rather than dropped.
+    let Some(first) = read_json_line::<Value, _>(&mut reader).await? else {
+        return Ok(());
+    };
+    let claims_attach = first.get("method").and_then(Value::as_str) == Some(ATTACH_METHOD);
+
+    if let Some(params) = attach_params(&first) {
+        let resolved = registry.resolve_attach(params.session_key.clone(), agent, params.last_seen);
+        write_json_line(&mut writer, &attached_ack(&params.session_key, &resolved)).await?;
+        // Held for the whole connection: it covers the gap between claiming
+        // the session and installing the attachment, and costs nothing after
+        // that, since an attached session is never idle anyway.
+        let _reservation = resolved.reservation;
+        return serve_split_with_session(
+            bridge,
+            reader,
+            writer,
+            resolved.session,
+            resolved.effective_last_seen,
+            None,
+        )
+        .await;
+    }
+
+    if claims_attach {
+        warn!(raw = %first, "ignoring malformed attach preamble; serving an isolated session");
+    }
+    let config = registry.config();
+    let session = Arc::new(Session::new(
+        agent,
+        "anonymous".into(),
+        config.ring_max_msgs,
+        config.ring_max_bytes,
+    ));
+    let pending = if claims_attach { None } else { Some(first) };
+    let result =
+        serve_split_with_session(bridge, reader, writer, Arc::clone(&session), None, pending).await;
+    session.cancel_all_pending();
+    result
+}
+
+fn attach_params(value: &Value) -> Option<AttachParams> {
+    if value.get("method").and_then(Value::as_str) != Some(ATTACH_METHOD) {
+        return None;
+    }
+    let params = value.get("params").cloned().unwrap_or(Value::Null);
+    let params: AttachParams = serde_json::from_value(params).ok()?;
+    if params.session_key.is_empty() {
+        return None;
+    }
+    Some(params)
+}
+
+fn attached_ack(session_key: &str, resolved: &ResolvedAttach) -> Value {
+    let kind = match resolved.kind {
+        AttachKind::Fresh => "fresh",
+        AttachKind::Resumed => "resumed",
+        AttachKind::DriftReload => "driftReload",
+    };
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": ATTACHED_METHOD,
+        "params": {
+            "sessionKey": session_key,
+            "kind": kind,
+            "currentSeq": resolved.current_seq,
+            "floorSeq": resolved.floor_seq,
+        },
+    })
 }
 
 #[cfg(unix)]
@@ -249,14 +387,49 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (reader, writer) = tokio::io::split(stream);
-    let mut reader = BufReader::new(reader);
+    serve_split_with_session(
+        bridge,
+        BufReader::new(reader),
+        writer,
+        session,
+        last_seen,
+        None,
+    )
+    .await
+}
+
+/// Shared body behind [`serve_stream_with_session`] and
+/// [`serve_stream_attached`], taking the halves already split so a caller that
+/// had to read a frame during handshake can hand it back via `pending`.
+async fn serve_split_with_session<B, R, W>(
+    bridge: Arc<B>,
+    mut reader: BufReader<R>,
+    writer: W,
+    session: Arc<Session>,
+    last_seen: Option<u64>,
+    pending: Option<Value>,
+) -> anyhow::Result<()>
+where
+    B: Bridge + ?Sized,
+    R: AsyncRead + Unpin + Send,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let conn = Conn::from_session(Arc::clone(&session));
 
     let attach = session.install_attachment(last_seen);
+    // Only this connection's own attachment may be torn down below. A client
+    // that reconnects before we notice this socket is dead has already
+    // preempted the slot, and detaching it here would kill the live stream it
+    // just set up — and mark a session detached that someone is attached to,
+    // which hands a live session to the reaper.
+    let generation = attach.generation;
     let writer_task = tokio::spawn(drain_attachment(writer, attach, Arc::clone(&session)));
 
+    if let Some(value) = pending {
+        dispatch_inbound(&bridge, &conn, value).await;
+    }
     let result = run_reader(bridge, &conn, &mut reader).await;
-    session.drop_attachment();
+    session.drop_attachment(generation);
     let _ = writer_task.await;
     result
 }
@@ -315,62 +488,69 @@ where
     R: AsyncRead + Unpin + Send,
 {
     while let Some(value) = read_json_line::<Value, _>(reader).await? {
-        let inbound = match InboundMessage::from_value(value.clone()) {
-            Ok(inbound) => inbound,
-            Err(error) => {
-                warn!(raw = %value, "discarding malformed json-rpc frame: {error}");
-                continue;
-            }
-        };
-        match inbound {
-            InboundMessage::Request(request) => {
-                tracing::info!(method = %request.method, id = %request.id, "json-rpc request");
-                let bridge = Arc::clone(&bridge);
-                let conn = conn.clone();
-                tokio::spawn(async move {
-                    let id = request.id;
-                    let method = request.method;
-                    let params = request.params.unwrap_or(Value::Null);
-                    let result = if method == "initialize" {
-                        conn.set_initialize_capabilities(&params);
-                        bridge.initialize(&conn, params).await
-                    } else {
-                        bridge.dispatch(&conn, &method, params).await
-                    };
-                    let response = match result {
-                        Ok(result) => JsonRpcResponse {
-                            jsonrpc: JsonRpcVersion,
-                            id,
-                            result: Some(result),
-                            error: None,
-                        },
-                        Err(error) => JsonRpcResponse {
-                            jsonrpc: JsonRpcVersion,
-                            id,
-                            result: None,
-                            error: Some(error),
-                        },
-                    };
-                    let _ = conn
-                        .notifier()
-                        .send_message(JsonRpcMessage::Response(response));
-                });
-            }
-            InboundMessage::Notification(notification) => {
-                bridge
-                    .notification(
-                        conn,
-                        &notification.method,
-                        notification.params.unwrap_or(Value::Null),
-                    )
-                    .await;
-            }
-            InboundMessage::Response(response) => {
-                conn.notifier().resolve_response(response).await;
-            }
-        }
+        dispatch_inbound(&bridge, conn, value).await;
     }
     Ok(())
+}
+
+async fn dispatch_inbound<B>(bridge: &Arc<B>, conn: &Conn, value: Value)
+where
+    B: Bridge + ?Sized,
+{
+    let inbound = match InboundMessage::from_value(value.clone()) {
+        Ok(inbound) => inbound,
+        Err(error) => {
+            warn!(raw = %value, "discarding malformed json-rpc frame: {error}");
+            return;
+        }
+    };
+    match inbound {
+        InboundMessage::Request(request) => {
+            tracing::info!(method = %request.method, id = %request.id, "json-rpc request");
+            let bridge = Arc::clone(bridge);
+            let conn = conn.clone();
+            tokio::spawn(async move {
+                let id = request.id;
+                let method = request.method;
+                let params = request.params.unwrap_or(Value::Null);
+                let result = if method == "initialize" {
+                    conn.set_initialize_capabilities(&params);
+                    bridge.initialize(&conn, params).await
+                } else {
+                    bridge.dispatch(&conn, &method, params).await
+                };
+                let response = match result {
+                    Ok(result) => JsonRpcResponse {
+                        jsonrpc: JsonRpcVersion,
+                        id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(error) => JsonRpcResponse {
+                        jsonrpc: JsonRpcVersion,
+                        id,
+                        result: None,
+                        error: Some(error),
+                    },
+                };
+                let _ = conn
+                    .notifier()
+                    .send_message(JsonRpcMessage::Response(response));
+            });
+        }
+        InboundMessage::Notification(notification) => {
+            bridge
+                .notification(
+                    conn,
+                    &notification.method,
+                    notification.params.unwrap_or(Value::Null),
+                )
+                .await;
+        }
+        InboundMessage::Response(response) => {
+            conn.notifier().resolve_response(response).await;
+        }
+    }
 }
 
 pub fn json_error_from_anyhow(error: anyhow::Error) -> JsonRpcError {

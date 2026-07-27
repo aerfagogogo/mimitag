@@ -481,6 +481,58 @@ extension ConversationDataFlowTests {
         XCTAssertTrue(store.statusMessage?.contains("切换连接档案") == true)
     }
 
+    func testNotificationLateRefreshDoesNotOverrideLaterUserSelection() async {
+        let project = makeProject(id: "proj_notification_selection_lease")
+        let target = makeSession(
+            id: "thread_notification_target",
+            projectID: project.id,
+            title: "通知 A",
+            status: "history",
+            source: "codex"
+        )
+        let selected = makeSession(
+            id: "thread_notification_selected",
+            projectID: project.id,
+            title: "用户 B",
+            status: "history",
+            source: "codex"
+        )
+        let client = BlockingSessionListRefreshClient(
+            projects: [project],
+            page: SessionsPage(sessions: [target]),
+            blockOnCall: 1
+        )
+        let appStore = AppStore()
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: { MockWebSocketClient() }
+        )
+        store.projects = [project]
+        store.recentWorkspaces = [AgentWorkspace(project: project)]
+        store.sidebarProjects = [project]
+        store.sessions = [selected]
+        await store.selectSession(selected)
+        let route = SessionNotificationRoute.current(
+            profileID: appStore.notificationRoutingProfileID,
+            projectID: project.id,
+            sessionID: target.id
+        )
+
+        let notificationTask = Task { await store.openSessionFromNotification(route) }
+        await client.waitForBlockedSessionListRefresh()
+        await store.selectSession(selected)
+        client.releaseBlockedSessionListRefresh()
+        let outcome = await notificationTask.value
+
+        XCTAssertEqual(outcome, .ignored)
+        XCTAssertEqual(store.selectedSessionID, selected.id)
+        XCTAssertEqual(store.connectedSessionID, selected.id)
+        XCTAssertTrue(store.sessions.contains { $0.id == target.id }, "通知目标仍应合并进索引")
+    }
+
     func testNotificationResponseAdapterKeepsColdStartPendingAndIgnoresMalformedPayload() throws {
         let adapter = SessionNotificationResponseAdapter()
         XCTAssertFalse(adapter.receive(userInfo: [
@@ -506,6 +558,79 @@ extension ConversationDataFlowTests {
         XCTAssertNil(adapter.pendingRoute)
         adapter.consume(route)
         XCTAssertNil(adapter.pendingRoute, "已消费路由不能重复触发")
+    }
+
+    func testNotificationPresentationSilencesOnlyVisibleRuntimeSessionAcrossScenes() {
+        let adapter = SessionNotificationResponseAdapter()
+        let currentRoute = SessionNotificationRoute.current(
+            profileID: "mac-a",
+            projectID: "proj-a",
+            sessionID: "session-a"
+        )
+        let otherRoute = SessionNotificationRoute.current(
+            profileID: "mac-a",
+            projectID: "proj-b",
+            sessionID: "session-b"
+        )
+        let currentSceneID = UUID()
+        let otherSceneID = UUID()
+        let runtimeIDs = [
+            "approval:session-a:request-1",
+            "user-input:session-a:request-2",
+            "completed:session-a:turn-1",
+            "failed:session-a:turn-2"
+        ].map(UserNotificationSessionReminderScheduler.runtimeNotificationID(for:))
+        let runtimeID = runtimeIDs[0]
+        let defaultOptions: UNNotificationPresentationOptions = [.banner, .sound]
+
+        adapter.setVisibleSessionRoute(currentRoute, for: currentSceneID)
+        adapter.setVisibleSessionRoute(otherRoute, for: otherSceneID)
+        for identifier in runtimeIDs {
+            XCTAssertEqual(
+                adapter.presentationOptions(
+                    forNotificationIdentifier: identifier,
+                    userInfo: currentRoute.userInfo
+                ),
+                [],
+                "审批、补充信息、完成和失败通知都应使用同一静默策略"
+            )
+        }
+        XCTAssertEqual(
+            adapter.presentationOptions(
+                forNotificationIdentifier: runtimeID,
+                userInfo: otherRoute.userInfo
+            ),
+            [],
+            "不同 Scene 各自显示的会话都应参与静默判断"
+        )
+
+        adapter.setVisibleSessionRoute(nil, for: currentSceneID)
+        XCTAssertEqual(
+            adapter.presentationOptions(
+                forNotificationIdentifier: runtimeID,
+                userInfo: currentRoute.userInfo
+            ),
+            defaultOptions,
+            "Scene 离开或销毁后不能残留旧可见状态"
+        )
+        XCTAssertEqual(
+            adapter.presentationOptions(
+                forNotificationIdentifier: UserNotificationSessionReminderScheduler.notificationID(
+                    for: currentRoute.sessionID
+                ),
+                userInfo: otherRoute.userInfo
+            ),
+            defaultOptions,
+            "定时提醒即使目标会话可见也保持系统展示"
+        )
+        XCTAssertEqual(
+            adapter.presentationOptions(
+                forNotificationIdentifier: runtimeID,
+                userInfo: ["mimi.route.sessionID": currentRoute.sessionID]
+            ),
+            defaultOptions,
+            "畸形或旧版路由必须默认继续提醒"
+        )
     }
 
     func testPreviewFileWritesDecodedPayloadToTemporaryFile() async throws {
@@ -801,6 +926,62 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(sockets.first?.connectedSessionIDs, [requested.id])
     }
 
+    func testColdStartResolvedCandidateCannotCommitAfterUserSelectsAnotherSession() async throws {
+        let project = makeProject(id: "proj_cold_restore_lease")
+        let restored = makeSession(
+            id: "thread_cold_restore_a",
+            projectID: project.id,
+            title: "恢复 A",
+            status: "history",
+            source: "codex"
+        )
+        let selected = makeSession(
+            id: "thread_cold_restore_b",
+            projectID: project.id,
+            title: "用户 B",
+            status: "history",
+            source: "codex"
+        )
+        let client = BlockingSessionListRefreshClient(
+            projects: [project],
+            page: SessionsPage(sessions: [restored]),
+            blockOnCall: 1
+        )
+        let appStore = AppStore()
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            recentWorkspaceStore: makeRecentWorkspaceStore(
+                workspaces: [AgentWorkspace(project: project)],
+                endpoint: appStore.endpoint
+            ),
+            clientFactory: { client },
+            webSocketFactory: { MockWebSocketClient() }
+        )
+        store.projects = [project]
+        store.reloadRecentWorkspaces()
+        store.sessions = [selected]
+        let snapshot = SessionRestoreSnapshot(endpoint: appStore.endpoint, session: restored)
+        let restoreLease = store.currentSelectionLease()
+
+        let resolveTask = Task { await store.resolveSessionForRestore(snapshot) }
+        await client.waitForBlockedSessionListRefresh()
+        await store.selectSession(selected)
+        client.releaseBlockedSessionListRefresh()
+        let resolvedCandidate = await resolveTask.value
+        let candidate = try XCTUnwrap(resolvedCandidate)
+        let didRestore = await store.selectSession(
+            candidate,
+            reason: .restoration,
+            ifCurrent: restoreLease
+        )
+
+        XCTAssertFalse(didRestore)
+        XCTAssertEqual(store.selectedSessionID, selected.id)
+        XCTAssertEqual(store.connectedSessionID, selected.id)
+    }
+
     func testWorkbenchRestorationRouteRoundTripsLocalSessionIDAndSourcePage() throws {
         let route = WorkbenchRestorationRoute.session(
             id: "local:claude:thread:123",
@@ -810,6 +991,45 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(
             WorkbenchRestorationRoute(storageValue: route.storageValue),
             route
+        )
+    }
+
+    func testWorkbenchVisibleSessionExcludesSettingsTabAndRootPages() {
+        var state = WorkbenchNavigationState(
+            route: .session(id: "session-visible", source: .sessions)
+        )
+
+        XCTAssertEqual(
+            state.visibleSessionID(usesCompactNavigation: true),
+            "session-visible"
+        )
+        _ = state.reduce(
+            .compactTabChanged(.settings),
+            usesCompactNavigation: true,
+            selectedSessionID: "session-visible"
+        )
+        XCTAssertNil(
+            state.visibleSessionID(usesCompactNavigation: true),
+            "设置 Tab 会保留会话路由，但会话内容已经不可见"
+        )
+
+        _ = state.reduce(
+            .compactTabChanged(.sessions),
+            usesCompactNavigation: true,
+            selectedSessionID: "session-visible"
+        )
+        XCTAssertEqual(
+            state.visibleSessionID(usesCompactNavigation: true),
+            "session-visible"
+        )
+        _ = state.reduce(
+            .compactPathChanged(tab: .sessions, path: []),
+            usesCompactNavigation: true,
+            selectedSessionID: "session-visible"
+        )
+        XCTAssertNil(
+            state.visibleSessionID(usesCompactNavigation: true),
+            "返回会话列表后不应再把 selectedSessionID 当作可见详情"
         )
     }
 
@@ -847,7 +1067,12 @@ extension ConversationDataFlowTests {
         var state = WorkbenchNavigationState(route: .workspaces)
 
         let selectionEffect = state.reduce(
-            .selectedSessionChanged("local:new-session"),
+            .selectionCommitted(SessionSelectionCommit(
+                sequence: 1,
+                projectID: "workspace",
+                sessionID: "local:new-session",
+                reason: .userOpen
+            )),
             usesCompactNavigation: true,
             selectedSessionID: "local:new-session"
         )
@@ -868,7 +1093,12 @@ extension ConversationDataFlowTests {
         var state = WorkbenchNavigationState(route: .workspaces)
 
         let effect = state.reduce(
-            .selectedSessionChanged("workspace-session"),
+            .selectionCommitted(SessionSelectionCommit(
+                sequence: 1,
+                projectID: "workspace",
+                sessionID: "workspace-session",
+                reason: .userOpen
+            )),
             usesCompactNavigation: false,
             selectedSessionID: "workspace-session"
         )
@@ -879,6 +1109,34 @@ extension ConversationDataFlowTests {
             .session(id: "workspace-session", source: .workspaces)
         )
         XCTAssertEqual(state.selection, .session("workspace-session"))
+    }
+
+    func testWorkbenchNavigationNotificationOpensSessionsDetail() {
+        for usesCompactNavigation in [true, false] {
+            var state = WorkbenchNavigationState(route: .workspaces)
+
+            let effect = state.reduce(
+                .selectionCommitted(SessionSelectionCommit(
+                    sequence: 1,
+                    projectID: "project",
+                    sessionID: "notification-session",
+                    reason: .notification
+                )),
+                usesCompactNavigation: usesCompactNavigation,
+                selectedSessionID: "notification-session"
+            )
+
+            XCTAssertNil(effect)
+            XCTAssertEqual(
+                state.route,
+                .session(id: "notification-session", source: .sessions)
+            )
+            XCTAssertEqual(state.selection, .session("notification-session"))
+            if usesCompactNavigation {
+                XCTAssertEqual(state.compactSelectedTab, .sessions)
+                XCTAssertEqual(state.compactSessionPath, [.session("notification-session")])
+            }
+        }
     }
 
     func testWorkbenchNavigationCompactWorkspacePopReturnsToWorkspace() {
@@ -924,18 +1182,71 @@ extension ConversationDataFlowTests {
         var state = WorkbenchNavigationState(route: .sessions)
 
         _ = state.reduce(
-            .selectedSessionChanged("local:optimistic"),
+            .selectionCommitted(SessionSelectionCommit(
+                sequence: 1,
+                projectID: "project",
+                sessionID: "local:optimistic",
+                reason: .userOpen
+            )),
             usesCompactNavigation: true,
             selectedSessionID: "local:optimistic"
         )
         _ = state.reduce(
-            .selectedSessionChanged("server-session"),
+            .selectionCommitted(SessionSelectionCommit(
+                sequence: 2,
+                projectID: "project",
+                sessionID: "server-session",
+                reason: .identityReplacement(previousID: "local:optimistic")
+            )),
             usesCompactNavigation: true,
             selectedSessionID: "server-session"
         )
 
         XCTAssertEqual(state.route, .session(id: "server-session", source: .sessions))
         XCTAssertEqual(state.compactSessionPath, [.session("server-session")])
+    }
+
+    func testWorkbenchNavigationIgnoresRestorationCommitAfterUserChangedRoute() {
+        var state = WorkbenchNavigationState(
+            route: .session(id: "session-b", source: .sessions)
+        )
+        let commit = SessionSelectionCommit(
+            sequence: 4,
+            projectID: "project",
+            sessionID: "session-a",
+            reason: .restoration
+        )
+
+        let effect = state.reduce(
+            .selectionCommitted(commit),
+            usesCompactNavigation: true,
+            selectedSessionID: "session-b"
+        )
+
+        XCTAssertNil(effect)
+        XCTAssertEqual(state.route, .session(id: "session-b", source: .sessions))
+        XCTAssertEqual(state.compactSessionPath, [.session("session-b")])
+    }
+
+    func testWorkbenchNavigationIdentityReplacementOnlyReplacesMatchingRoute() {
+        var state = WorkbenchNavigationState(
+            route: .session(id: "session-b", source: .workspaces)
+        )
+        let commit = SessionSelectionCommit(
+            sequence: 5,
+            projectID: "project",
+            sessionID: "session-a-real",
+            reason: .identityReplacement(previousID: "local:session-a")
+        )
+
+        _ = state.reduce(
+            .selectionCommitted(commit),
+            usesCompactNavigation: true,
+            selectedSessionID: "session-b"
+        )
+
+        XCTAssertEqual(state.route, .session(id: "session-b", source: .workspaces))
+        XCTAssertEqual(state.compactWorkspacePath, [.session("session-b")])
     }
 
     func testWorkbenchRestorationRouteRejectsMismatchedSessionSnapshot() throws {
@@ -1108,7 +1419,7 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(conversationStore.messages(for: running.id).last?.content, "等待补充信息：范围")
     }
 
-    func testSessionStoreReturnToListDoesNotPublishWhenAlreadyCleared() {
+    func testSessionStoreReturnToListPublishesOnlyIntentWhenAlreadyCleared() {
         let store = SessionStore(
             appStore: AppStore(),
             conversationStore: ConversationStore(),
@@ -1122,13 +1433,14 @@ extension ConversationDataFlowTests {
             .sink { _ in publishCount += 1 }
             .store(in: &cancellables)
 
-        // 已经处于会话列表页时再次返回，不应重复写入 nil/disconnected 状态刷新整棵侧栏 UI。
+        // 已经处于列表时仍需发布一次 invalidation 来淘汰迟到任务，但不能重复发布 nil/disconnected。
         store.returnToSessionList()
 
-        XCTAssertEqual(publishCount, 0)
+        XCTAssertEqual(publishCount, 1)
+        XCTAssertEqual(store.lastSelectionCommit?.reason, .invalidation)
     }
 
-    func testSelectingAlreadySelectedHistoryDoesNotPublishWhenHistoryLoaded() async {
+    func testSelectingAlreadySelectedHistoryPublishesOnlyNavigationIntentWhenHistoryLoaded() async {
         let project = makeProject(id: "proj_1")
         let history = makeSession(id: "codex_history", projectID: project.id, title: "历史", status: "history", source: "codex", resumeID: "history")
         let conversationStore = ConversationStore()
@@ -1164,10 +1476,11 @@ extension ConversationDataFlowTests {
             .sink { _ in publishCount += 1 }
             .store(in: &cancellables)
 
-        // Codex/litter 都避免 no-op diff 继续下发事件；重复点当前历史行也不应刷新侧栏。
+        // 重复点当前历史行仍是新的用户意图，只发布 commit，不重复写入 project/session 或重建 socket。
         await store.selectSession(history)
 
-        XCTAssertEqual(publishCount, 0)
+        XCTAssertEqual(publishCount, 1)
+        XCTAssertEqual(store.lastSelectionCommit?.reason, .userOpen)
         XCTAssertEqual(store.selectedProjectID, project.id)
         XCTAssertEqual(store.selectedSessionID, history.id)
         XCTAssertEqual(sockets.count, 1)
@@ -2618,8 +2931,10 @@ extension ConversationDataFlowTests {
         await store.refreshAll(autoAttach: false)
         await store.selectSession(session)
         await store.refreshCapabilities()
+        await store.refreshCapabilities(forceReload: true)
 
-        XCTAssertEqual(client.requestedCapabilityPaths, [session.dir])
+        XCTAssertEqual(client.requestedCapabilityPaths, [session.dir, session.dir])
+        XCTAssertEqual(client.requestedCapabilityForceReloads, [false, true])
         XCTAssertEqual(store.capabilityList, response)
         XCTAssertNil(store.capabilityErrorMessage)
     }

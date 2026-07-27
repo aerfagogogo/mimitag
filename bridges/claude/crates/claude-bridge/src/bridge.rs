@@ -10,9 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alleycat_bridge_core::server::{Bridge, Conn};
-use alleycat_bridge_core::{
-    JsonRpcError, LocalLauncher, ProcessLauncher, ThreadIndex as CoreThreadIndex, error_codes,
-};
+use alleycat_bridge_core::{JsonRpcError, LocalLauncher, ProcessLauncher, error_codes};
 use alleycat_codex_proto as p;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -20,7 +18,7 @@ use dashmap::DashMap;
 use serde_json::Value;
 
 use crate::handlers;
-use crate::index::{ClaudeHydrator, ClaudeSessionRef};
+use crate::index::{ClaudeHydrator, open_index_and_hydrate};
 use crate::pool::{ClaudePool, PoolPolicy};
 use crate::state::{ConnectionState, ThreadDefaults};
 
@@ -87,7 +85,12 @@ impl ClaudeBridge {
         let session = ctx.session();
         let key = format!("{}:{}", session.agent, session.node_id);
         if let Some(existing) = self.per_conn.get(&key) {
-            return Arc::clone(existing.value());
+            let state = Arc::clone(existing.value());
+            // 同一个稳定 session key 在 bridge-core 的离线 TTL 之后会得到
+            // 一个新的 replay ring。runtime 状态继续复用，但交付目标必须切到
+            // 本次 attach 的 Session，避免通知写进已经被回收的旧 ring。
+            state.rebind_session(Arc::clone(session));
+            return state;
         }
         let state = Arc::new(ConnectionState::with_launcher(
             Arc::clone(ctx.session()),
@@ -260,11 +263,7 @@ impl ClaudeBridgeBuilder {
             Some(dir) => ClaudeHydrator::with_override_dir(dir),
             None => ClaudeHydrator::new(),
         };
-        let index = CoreThreadIndex::<ClaudeSessionRef>::open_and_hydrate(
-            codex_home.join("threads.json"),
-            &hydrator,
-        )
-        .await?;
+        let index = open_index_and_hydrate(codex_home.join("threads.json"), &hydrator).await?;
         let thread_index: ThreadIndexHandle = index;
 
         Ok(Arc::new(ClaudeBridge {
@@ -619,9 +618,10 @@ fn thread_to_rpc(err: handlers::thread::ThreadError) -> JsonRpcError {
 }
 
 fn turn_to_rpc(err: handlers::turn::TurnError) -> JsonRpcError {
+    let data = err.rpc_data();
     JsonRpcError {
         code: err.rpc_code(),
         message: err.to_string(),
-        data: None,
+        data,
     }
 }

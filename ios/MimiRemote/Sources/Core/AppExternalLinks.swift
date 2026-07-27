@@ -4,6 +4,9 @@ import Foundation
 /// 链接只指向公开仓库中的稳定文档，不携带设备、连接地址或任何用户标识。
 enum AppExternalLinks {
     static let marketing = makeURL("https://github.com/gaixianggeng/mimi-remote")
+    /// 普通用户从公开 Release 页面了解版本；系统分享则发送稳定的 latest DMG 直链。
+    static let macRelease = makeURL("https://github.com/gaixianggeng/mimi-remote/releases/latest")
+    static let macInstaller = makeURL("https://github.com/gaixianggeng/mimi-remote/releases/latest/download/Mimi-Remote-Mac.dmg")
     static let privacyPolicy = makeURL("https://github.com/gaixianggeng/mimi-remote/blob/main/docs/privacy-policy.md")
     static let termsOfUse = makeURL("https://github.com/gaixianggeng/mimi-remote/blob/main/docs/terms-of-use.md")
     static let support = makeURL("https://github.com/gaixianggeng/mimi-remote/blob/main/docs/support.md")

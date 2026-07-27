@@ -26,6 +26,8 @@ pub use alleycat_bridge_core::{
 };
 use alleycat_codex_proto::{SessionSource, Thread, ThreadSourceKind, ThreadStatus};
 
+use crate::translate::items::is_internal_local_command_text;
+
 /// Bridge CLI version string baked into `Thread.cli_version`.
 pub const CLI_VERSION: &str = concat!("alleycat-claude-bridge/", env!("CARGO_PKG_VERSION"));
 
@@ -148,14 +150,73 @@ impl Hydrator<ClaudeSessionRef> for ClaudeHydrator {
 pub async fn open_and_hydrate(codex_home: &Path) -> Result<Arc<CoreThreadIndex<ClaudeSessionRef>>> {
     let path = codex_home.join("threads.json");
     let hydrator = ClaudeHydrator::new();
-    CoreThreadIndex::open_and_hydrate(path, &hydrator).await
+    open_index_and_hydrate(path, &hydrator).await
+}
+
+/// 打开 Claude 索引时清理旧版本留下的空 preview 和本地命令标题，再用同一份扫描结果补齐。
+/// 空 preview 只有在扫描结果也证明它不是真实会话时才删除，避免误伤纯图片会话。
+pub async fn open_index_and_hydrate(
+    path: PathBuf,
+    hydrator: &ClaudeHydrator,
+) -> Result<Arc<CoreThreadIndex<ClaudeSessionRef>>> {
+    let index = CoreThreadIndex::<ClaudeSessionRef>::open_at(path).await?;
+    let scanned = hydrator.scan().await?;
+    let scanned_by_id: std::collections::HashMap<&str, &IndexEntry> = scanned
+        .iter()
+        .map(|entry| (entry.thread_id.as_str(), entry))
+        .collect();
+    let mut invalid_ids = Vec::new();
+    let mut repaired_entries = Vec::new();
+    for mut entry in index.snapshot().await {
+        let preview = entry.preview.trim();
+        let Some(fresh) = scanned_by_id.get(entry.thread_id.as_str()) else {
+            if preview.is_empty() || is_legacy_invalid_preview(preview) {
+                invalid_ids.push(entry.thread_id);
+            }
+            continue;
+        };
+        if is_legacy_invalid_preview(preview) {
+            // 只替换扫描产生的字段，保留用户设置的名称、归档和分叉关系。
+            entry.preview.clone_from(&fresh.preview);
+            entry.cwd.clone_from(&fresh.cwd);
+            entry.updated_at = fresh.updated_at;
+            entry.metadata.clone_from(&fresh.metadata);
+            repaired_entries.push(entry);
+        }
+    }
+    let removed = index.remove_many(&invalid_ids).await?;
+    let repaired = index.upsert_many(repaired_entries).await?;
+    if removed > 0 || repaired > 0 {
+        tracing::info!(
+            removed,
+            repaired,
+            "repaired legacy Claude thread index rows"
+        );
+    }
+    index.hydrate_entries(scanned).await?;
+    Ok(index)
+}
+
+fn is_legacy_invalid_preview(preview: &str) -> bool {
+    let preview = preview.trim();
+    let truncated_internal_prefix = [
+        "<local-command-caveat>",
+        "<local-command-stdout>",
+        "<local-command-stderr>",
+        "<command-name>",
+    ]
+    .iter()
+    .any(|prefix| preview.starts_with(prefix));
+    preview == "(no messages)"
+        || truncated_internal_prefix
+        || is_internal_local_command_text(preview)
 }
 
 /// Compat shim. Today's daemon calls
 /// `alleycat_claude_bridge::index::ThreadIndex::open_and_hydrate(&codex_home)`
 /// and assigns the result to an `Arc<dyn ThreadIndexHandle<ClaudeSessionRef>>`.
 /// The shim preserves the spelling so the daemon keeps compiling — it forwards
-/// to [`CoreThreadIndex::open_and_hydrate`] with [`ClaudeHydrator`].
+/// to the Claude-specific cleanup + hydration flow.
 pub struct ThreadIndex;
 
 impl ThreadIndex {
@@ -239,5 +300,74 @@ mod tests {
         assert!(raw.contains("\"claudeSessionPath\""), "raw={raw}");
         assert!(raw.contains("\"claudeSessionId\""), "raw={raw}");
         assert!(raw.contains("\"threadId\""), "raw={raw}");
+    }
+
+    #[tokio::test]
+    async fn startup_repairs_legacy_internal_titles_and_drops_empty_rows() {
+        let dir = TempDir::new().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        std::fs::write(
+            projects_dir.join("dirty.jsonl"),
+            [
+                r#"{"type":"user","isMeta":true,"cwd":"/work","message":{"role":"user","content":"<local-command-caveat>internal</local-command-caveat>"},"timestamp":"2026-07-17T05:11:50Z"}"#,
+                r#"{"type":"user","cwd":"/work","message":{"role":"user","content":"真实标题"},"timestamp":"2026-07-17T05:11:53Z"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            projects_dir.join("empty.jsonl"),
+            r#"{"type":"user","isMeta":true,"cwd":"/work","message":{"role":"user","content":"metadata"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            projects_dir.join("image-only.jsonl"),
+            r#"{"type":"user","cwd":"/work","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}}"#,
+        )
+        .unwrap();
+
+        let index_path = dir.path().join("threads.json");
+        let legacy = CoreThreadIndex::<ClaudeSessionRef>::open_at(index_path.clone())
+            .await
+            .unwrap();
+        let mut dirty = entry("dirty", "/work", 100, 200, false);
+        // 旧扫描器只保存第一行，多行 caveat 的索引标题没有闭合标签。
+        dirty.preview = "<local-command-caveat>Caveat: generated by local command".into();
+        dirty.name = Some("用户命名".into());
+        dirty.archived = true;
+        legacy.insert(dirty).await.unwrap();
+        let mut empty = entry("empty", "/work", 100, 200, false);
+        empty.preview = "(no messages)".into();
+        legacy.insert(empty).await.unwrap();
+        let mut abandoned = entry("abandoned", "/work", 100, 200, false);
+        abandoned.preview = String::new();
+        legacy.insert(abandoned).await.unwrap();
+        let mut image_only = entry("image-only", "/work", 100, 200, false);
+        image_only.preview = String::new();
+        legacy.insert(image_only).await.unwrap();
+        legacy
+            .insert(entry("remote-clean", "/remote", 100, 200, false))
+            .await
+            .unwrap();
+        drop(legacy);
+
+        let hydrator = ClaudeHydrator::with_override_dir(projects_dir);
+        let repaired = open_index_and_hydrate(index_path, &hydrator).await.unwrap();
+
+        let repaired_dirty = repaired.lookup("dirty").await.unwrap();
+        assert_eq!(repaired_dirty.preview, "真实标题");
+        assert_eq!(repaired_dirty.name.as_deref(), Some("用户命名"));
+        assert!(repaired_dirty.archived);
+        assert!(repaired.lookup("empty").await.is_none());
+        assert!(repaired.lookup("abandoned").await.is_none());
+        assert!(
+            repaired.lookup("image-only").await.is_some(),
+            "纯图片用户输入是真实会话，不能因标题为空而清理"
+        );
+        assert!(
+            repaired.lookup("remote-clean").await.is_some(),
+            "扫描目录不可见的正常远端索引不能被顺带清空"
+        );
     }
 }

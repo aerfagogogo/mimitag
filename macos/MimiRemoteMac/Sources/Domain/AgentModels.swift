@@ -1,20 +1,57 @@
 import Foundation
 
+enum PairingNetwork: String, CaseIterable, Identifiable, Sendable, Codable {
+    case automatic = "auto"
+    case tailscale
+    case localNetwork = "lan"
+
+    var id: String { rawValue }
+
+    static func inferred(from endpoint: String) -> PairingNetwork {
+        guard let host = URLComponents(string: endpoint)?.host else {
+            return .tailscale
+        }
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else {
+            return .tailscale
+        }
+        if octets[0] == 100, (64...127).contains(octets[1]) {
+            return .tailscale
+        }
+        if octets[0] == 10 ||
+            (octets[0] == 172 && (16...31).contains(octets[1])) ||
+            (octets[0] == 192 && octets[1] == 168)
+        {
+            return .localNetwork
+        }
+        return .tailscale
+    }
+}
+
 struct PairingInfo: Codable, Equatable, Sendable {
     let endpoint: String
+    let network: PairingNetwork
     let pairURL: String
     let expiresAt: String
     let warnings: [String]
 
     enum CodingKeys: String, CodingKey {
         case endpoint
+        case network
         case pairURL = "pair_url"
         case expiresAt = "pair_expires_at"
         case warnings
     }
 
-    init(endpoint: String, pairURL: String, expiresAt: String, warnings: [String]) {
+    init(
+        endpoint: String,
+        network: PairingNetwork? = nil,
+        pairURL: String,
+        expiresAt: String,
+        warnings: [String]
+    ) {
         self.endpoint = endpoint
+        self.network = network ?? PairingNetwork.inferred(from: endpoint)
         self.pairURL = pairURL
         self.expiresAt = expiresAt
         self.warnings = warnings
@@ -23,10 +60,24 @@ struct PairingInfo: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         endpoint = try container.decode(String.self, forKey: .endpoint)
+        network = try container.decodeIfPresent(PairingNetwork.self, forKey: .network)
+            ?? PairingNetwork.inferred(from: endpoint)
         pairURL = try container.decode(String.self, forKey: .pairURL)
         expiresAt = try container.decode(String.self, forKey: .expiresAt)
         // agentd 会在没有警告时省略 warnings；客户端统一成空数组，简化视图状态。
         warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+    }
+}
+
+struct NetworkConfigurationResult: Codable, Equatable, Sendable {
+    let lanEnabled: Bool
+    let changed: Bool
+    let restartRequired: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case lanEnabled = "lan_enabled"
+        case changed
+        case restartRequired = "restart_required"
     }
 }
 
@@ -53,18 +104,246 @@ struct DoctorFixResults: Codable, Equatable, Sendable {
     let results: AgentDoctorResults
 }
 
+struct AgentRuntimeStatusSnapshot: Codable, Equatable, Sendable {
+    let checkedAt: String?
+    let runtimes: [AgentRuntimeStatus]
+    let refreshing: Bool?
+    let stale: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case checkedAt = "checked_at"
+        case runtimes
+        case refreshing
+        case stale
+    }
+
+    init(
+        checkedAt: String?,
+        runtimes: [AgentRuntimeStatus],
+        refreshing: Bool? = nil,
+        stale: Bool? = nil
+    ) {
+        self.checkedAt = checkedAt
+        self.runtimes = runtimes
+        self.refreshing = refreshing
+        self.stale = stale
+    }
+
+    var checkedDate: Date? {
+        guard let checkedAt = checkedAt?.trimmedNonEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: checkedAt) ?? ISO8601DateFormatter().date(from: checkedAt)
+    }
+
+    func isExpired(at now: Date = Date()) -> Bool {
+        if stale == true { return true }
+        guard let checkedDate else {
+            return refreshing != true
+        }
+        return now.timeIntervalSince(checkedDate) > 2 * 60
+    }
+
+    var hasRetryableFailure: Bool {
+        runtimes.contains {
+            $0.enabled
+                && $0.state == .unavailable
+                && $0.reason != "refresh_in_progress"
+        }
+    }
+}
+
+enum AgentRuntimeConnectionState: String, Codable, Equatable, Sendable {
+    case connected
+    case available
+    case signedOut = "signed_out"
+    case disabled
+    case unavailable
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        // 服务端新增状态时 fail closed，但不要让整个 agent status 解码失败。
+        self = AgentRuntimeConnectionState(rawValue: raw) ?? .unavailable
+    }
+}
+
+struct AgentRuntimeStatus: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let enabled: Bool
+    let state: AgentRuntimeConnectionState
+    let version: String?
+    let startedAt: String?
+    let authMode: String?
+    let planType: String?
+    let reason: String?
+    let rateLimits: AgentRuntimeRateLimits?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case enabled
+        case state
+        case version
+        case startedAt = "started_at"
+        case authMode = "auth_mode"
+        case planType = "plan_type"
+        case reason
+        case rateLimits = "rate_limits"
+    }
+
+    init(
+        id: String,
+        title: String,
+        enabled: Bool,
+        state: AgentRuntimeConnectionState,
+        version: String? = nil,
+        startedAt: String? = nil,
+        authMode: String?,
+        planType: String?,
+        reason: String?,
+        rateLimits: AgentRuntimeRateLimits?
+    ) {
+        self.id = id
+        self.title = title
+        self.enabled = enabled
+        self.state = state
+        self.version = version
+        self.startedAt = startedAt
+        self.authMode = authMode
+        self.planType = planType
+        self.reason = reason
+        self.rateLimits = rateLimits
+    }
+
+    var effectivePlanType: String? {
+        planType?.trimmedNonEmpty ?? rateLimits?.planType?.trimmedNonEmpty
+    }
+
+    var startedDate: Date? {
+        guard let startedAt = startedAt?.trimmedNonEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: startedAt) ?? ISO8601DateFormatter().date(from: startedAt)
+    }
+}
+
+struct AgentRuntimeRateLimits: Codable, Equatable, Sendable {
+    let limitID: String?
+    let limitName: String?
+    let planType: String?
+    let reachedType: String?
+    let availability: String?
+    let unavailableReason: String?
+    let primary: AgentRuntimeRateLimitWindow?
+    let secondary: AgentRuntimeRateLimitWindow?
+    let hasCredits: Bool?
+    let creditsUnlimited: Bool?
+    let creditBalance: String?
+
+    enum CodingKeys: String, CodingKey {
+        case limitID = "limit_id"
+        case limitName = "limit_name"
+        case planType = "plan_type"
+        case reachedType = "reached_type"
+        case availability
+        case unavailableReason = "unavailable_reason"
+        case primary
+        case secondary
+        case hasCredits = "has_credits"
+        case creditsUnlimited = "credits_unlimited"
+        case creditBalance = "credit_balance"
+    }
+
+    var windows: [AgentRuntimeRateLimitWindow] {
+        [primary, secondary]
+            .compactMap { $0 }
+            .sorted {
+                ($0.windowDurationMins ?? Int64.max) < ($1.windowDurationMins ?? Int64.max)
+            }
+    }
+
+    var isExhausted: Bool {
+        if reachedType?.trimmedNonEmpty != nil {
+            return true
+        }
+        return windows.contains { ($0.usedPercent ?? 0) >= 100 }
+    }
+}
+
+struct AgentRuntimeRateLimitWindow: Codable, Equatable, Sendable {
+    let usedPercent: Double?
+    let windowDurationMins: Int64?
+    let resetsAt: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case usedPercent = "used_percent"
+        case windowDurationMins = "window_duration_mins"
+        case resetsAt = "resets_at"
+    }
+
+    var remainingFraction: Double? {
+        usedPercent.map { min(max(1 - $0 / 100, 0), 1) }
+    }
+
+    var remainingPercentText: String? {
+        remainingFraction.map { fraction in
+            let percent = fraction * 100
+            if abs(percent.rounded() - percent) < 0.0001 {
+                return "\(Int(percent.rounded()))%"
+            }
+            return String(format: "%.1f%%", percent)
+        }
+    }
+
+    var durationLabel: String {
+        guard let minutes = windowDurationMins, minutes > 0 else {
+            return "额度窗口"
+        }
+        if minutes.isMultiple(of: 24 * 60) {
+            return "\(minutes / (24 * 60))d"
+        }
+        if minutes.isMultiple(of: 60) {
+            return "\(minutes / 60)h"
+        }
+        return "\(minutes)m"
+    }
+
+    var resetDate: Date? {
+        guard let resetsAt, resetsAt > 0 else { return nil }
+        let seconds = resetsAt > 10_000_000_000
+            ? TimeInterval(resetsAt) / 1_000
+            : TimeInterval(resetsAt)
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    var isExhausted: Bool {
+        (usedPercent ?? 0) >= 100
+    }
+}
+
+private extension String {
+    var trimmedNonEmpty: String? {
+        let value = trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+}
+
 struct AgentStatus: Codable, Equatable, Sendable {
     let processOK: Bool
     let serviceOK: Bool
     let processError: String?
     let serviceError: String?
     let version: String
+    let serverVersion: String?
     let endpoint: String
     let configPath: String
     let projects: Int
     let doctorOK: Bool
     let doctor: AgentDoctorResults
     let pairExpires: String?
+    let runtimeStatus: AgentRuntimeStatusSnapshot?
 
     enum CodingKeys: String, CodingKey {
         case processOK = "process_ok"
@@ -72,12 +351,79 @@ struct AgentStatus: Codable, Equatable, Sendable {
         case processError = "process_error"
         case serviceError = "service_error"
         case version
+        case serverVersion = "server_version"
         case endpoint
         case configPath = "config_path"
         case projects
         case doctorOK = "doctor_ok"
         case doctor
         case pairExpires = "pair_expires"
+        case runtimeStatus = "runtime_status"
+    }
+
+    init(
+        processOK: Bool,
+        serviceOK: Bool,
+        processError: String?,
+        serviceError: String?,
+        version: String,
+        serverVersion: String? = nil,
+        endpoint: String,
+        configPath: String,
+        projects: Int,
+        doctorOK: Bool,
+        doctor: AgentDoctorResults,
+        pairExpires: String?,
+        runtimeStatus: AgentRuntimeStatusSnapshot? = nil
+    ) {
+        self.processOK = processOK
+        self.serviceOK = serviceOK
+        self.processError = processError
+        self.serviceError = serviceError
+        self.version = version
+        self.serverVersion = serverVersion
+        self.endpoint = endpoint
+        self.configPath = configPath
+        self.projects = projects
+        self.doctorOK = doctorOK
+        self.doctor = doctor
+        self.pairExpires = pairExpires
+        self.runtimeStatus = runtimeStatus
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        processOK = try container.decode(Bool.self, forKey: .processOK)
+        serviceOK = try container.decode(Bool.self, forKey: .serviceOK)
+        processError = try container.decodeIfPresent(String.self, forKey: .processError)
+        serviceError = try container.decodeIfPresent(String.self, forKey: .serviceError)
+        version = try container.decode(String.self, forKey: .version)
+        serverVersion = try container.decodeIfPresent(String.self, forKey: .serverVersion)
+        endpoint = try container.decode(String.self, forKey: .endpoint)
+        configPath = try container.decode(String.self, forKey: .configPath)
+        projects = try container.decode(Int.self, forKey: .projects)
+        doctorOK = try container.decode(Bool.self, forKey: .doctorOK)
+        doctor = try container.decode(AgentDoctorResults.self, forKey: .doctor)
+        pairExpires = try container.decodeIfPresent(String.self, forKey: .pairExpires)
+        do {
+            runtimeStatus = try container.decodeIfPresent(
+                AgentRuntimeStatusSnapshot.self,
+                forKey: .runtimeStatus
+            )
+        } catch {
+            // runtime_status 是菜单栏增强字段。混合版本或局部协议漂移时只丢弃
+            // 该快照，不能让健康检查、迁移和服务控制一起解码失败。
+            runtimeStatus = nil
+        }
+    }
+
+    var hasAgentVersionMismatch: Bool {
+        guard let running = serverVersion?.trimmedNonEmpty,
+              let bundled = version.trimmedNonEmpty
+        else {
+            return false
+        }
+        return running != bundled
     }
 }
 

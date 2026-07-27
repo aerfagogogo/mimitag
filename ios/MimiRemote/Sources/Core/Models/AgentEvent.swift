@@ -24,6 +24,50 @@ enum AgentEvent {
 }
 
 extension AgentEvent {
+    func withReplayBoundarySequence(_ sequence: UInt64?, epoch: UInt64?) -> AgentEvent {
+        guard let sequence else { return self }
+        switch self {
+        case .session, .unknown:
+            return self
+        case .sessionRow(let row, let metadata):
+            return .sessionRow(row, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .sessionStatus(let status, let metadata):
+            return .sessionStatus(status, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .sessionContext(let context, let metadata):
+            return .sessionContext(context, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .goalUpdated(let goal, let metadata):
+            return .goalUpdated(goal, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .goalCleared(let metadata):
+            return .goalCleared(metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .turnStarted(let metadata):
+            return .turnStarted(metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .assistantDelta(let delta, let metadata):
+            return .assistantDelta(delta, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .messageCompleted(let message, let metadata):
+            return .messageCompleted(message, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .processItemCompleted(let message, let context, let metadata):
+            return .processItemCompleted(message, context, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .logDelta(let delta, let metadata):
+            return .logDelta(delta, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .diffUpdated(let diff, let metadata):
+            return .diffUpdated(diff, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .approvalRequest(let request, let metadata):
+            return .approvalRequest(request, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .approvalResolved(let metadata):
+            return .approvalResolved(metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .userInputRequest(let request, let metadata):
+            return .userInputRequest(request, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .userInputResolved(let metadata, let skipped):
+            return .userInputResolved(metadata.withReplayBoundarySequence(sequence, epoch: epoch), skipped: skipped)
+        case .turnCompleted(let metadata):
+            return .turnCompleted(metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .warning(let warning, let metadata):
+            return .warning(warning, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        case .error(let error, let metadata):
+            return .error(error, metadata.withReplayBoundarySequence(sequence, epoch: epoch))
+        }
+    }
+
     var contiguousPayloadByteCount: Int? {
         switch self {
         case .assistantDelta(let delta, _):

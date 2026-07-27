@@ -2,12 +2,29 @@ package httpapi
 
 import (
 	"encoding/base64"
+	"errors"
+	"io/fs"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
+
+// pathAccessDeniedMessage 区分“路径不在 allowlist / 不存在”与“OS 拒绝访问”。
+// macOS 上照片图库（.photoslibrary）、Mail 等 TCC 保护目录：路径能 stat/EvalSymlinks，
+// 但 open/read 会以 EPERM 失败。这不是授权范围问题，应返回与当前平台匹配的可操作提示，
+// 避免用户误以为要改 browse_roots。
+func pathAccessDeniedMessage(err error) (string, bool) {
+	if !errors.Is(err, fs.ErrPermission) {
+		return "", false
+	}
+	if runtime.GOOS == "darwin" {
+		return "agentd 无法访问该路径：可能是 macOS 隐私保护目录（如“照片”图库）。请在 系统设置 → 隐私与安全性 → 完全磁盘访问 中允许 agentd（或 Mimi Remote），并重启应用后重试。", true
+	}
+	return "agentd 无法访问该路径：操作系统拒绝了读取权限。请检查 agentd 运行用户对该路径及其父目录的读取权限，并重启服务后重试。", true
+}
 
 // filePreviewMaxBytes 限制单个预览文件大小。QuickLook 适合查看产物，不适合把大文件当下载通道。
 var filePreviewMaxBytes int64 = 20 << 20
@@ -28,6 +45,7 @@ type fileReadResponse struct {
 type fileReadResolvedPath struct {
 	realPath              string
 	photosDerivativeImage bool
+	codexClipboardImage   bool
 }
 
 var filePreviewImageExtensions = map[string]struct{}{
@@ -37,6 +55,12 @@ var filePreviewImageExtensions = map[string]struct{}{
 	".jpg":  {},
 	".png":  {},
 	".webp": {},
+}
+
+var codexClipboardImageExtensions = map[string]struct{}{
+	".jpeg": {},
+	".jpg":  {},
+	".png":  {},
 }
 
 func (r *Router) fileReadHandler(w http.ResponseWriter, req *http.Request) {
@@ -63,6 +87,10 @@ func (r *Router) fileReadHandler(w http.ResponseWriter, req *http.Request) {
 	realPath := resolved.realPath
 	stat, err := os.Stat(realPath)
 	if err != nil {
+		if msg, ok := pathAccessDeniedMessage(err); ok {
+			writeError(w, http.StatusForbidden, msg)
+			return
+		}
 		writeError(w, http.StatusForbidden, "路径不在允许范围内或不可访问")
 		return
 	}
@@ -81,11 +109,20 @@ func (r *Router) fileReadHandler(w http.ResponseWriter, req *http.Request) {
 
 	data, err := os.ReadFile(realPath)
 	if err != nil {
+		if msg, ok := pathAccessDeniedMessage(err); ok {
+			writeError(w, http.StatusForbidden, msg)
+			return
+		}
 		writeError(w, http.StatusForbidden, "路径不在允许范围内或不可访问")
 		return
 	}
 	contentType := detectFileContentType(realPath, data)
-	if resolved.photosDerivativeImage && !strings.HasPrefix(contentType, "image/") {
+	if resolved.codexClipboardImage {
+		// 剪贴板临时目录不属于项目授权根，不能只相信扩展名；必须用文件头再次确认。
+		contentType = detectFileContentTypeFromBytes(data)
+	}
+	if (resolved.photosDerivativeImage || resolved.codexClipboardImage) &&
+		!strings.HasPrefix(contentType, "image/") {
 		writeError(w, http.StatusBadRequest, "仅支持图片预览")
 		return
 	}
@@ -107,7 +144,73 @@ func (r *Router) resolveReadableFilePath(raw string) (fileReadResolvedPath, bool
 	if realPath, ok := allowedPhotosDerivativeImagePath(raw); ok {
 		return fileReadResolvedPath{realPath: realPath, photosDerivativeImage: true}, true
 	}
+	// Codex 桌面端把剪贴板图片写到当前 macOS 用户的临时目录，再在会话里保存 localImage 路径。
+	// 只放行严格命名且可验证为图片的普通文件，不能把整个 /var/folders 暴露成 browse root。
+	if runtime.GOOS == "darwin" {
+		if realPath, ok := allowedCodexClipboardImagePath(raw, os.TempDir()); ok {
+			return fileReadResolvedPath{realPath: realPath, codexClipboardImage: true}, true
+		}
+	}
 	return fileReadResolvedPath{}, false
+}
+
+func allowedCodexClipboardImagePath(raw string, temporaryRoot string) (string, bool) {
+	path := strings.TrimSpace(raw)
+	root := strings.TrimSpace(temporaryRoot)
+	if path == "" || root == "" || !isCodexClipboardImageName(filepath.Base(path)) {
+		return "", false
+	}
+
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	// 最终文件本身不允许是符号链接；否则攻击者可以用可信文件名指向任意文件。
+	info, err := os.Lstat(abs)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", false
+	}
+	realPath, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", false
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		realRoot, err = filepath.Abs(root)
+		if err != nil {
+			return "", false
+		}
+	}
+	if filepath.Clean(filepath.Dir(realPath)) != filepath.Clean(realRoot) ||
+		!isCodexClipboardImageName(filepath.Base(realPath)) {
+		return "", false
+	}
+	return realPath, true
+}
+
+func isCodexClipboardImageName(name string) bool {
+	const prefix = "codex-clipboard-"
+	ext := strings.ToLower(filepath.Ext(name))
+	if _, ok := codexClipboardImageExtensions[ext]; !ok {
+		return false
+	}
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	if !strings.HasPrefix(stem, prefix) {
+		return false
+	}
+	id := strings.TrimPrefix(stem, prefix)
+	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
+		return false
+	}
+	for index, value := range id {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		if !((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func allowedPhotosDerivativeImagePath(raw string) (string, bool) {
@@ -162,6 +265,10 @@ func detectFileContentType(path string, data []byte) string {
 	if value := mime.TypeByExtension(strings.ToLower(filepath.Ext(path))); value != "" {
 		return value
 	}
+	return detectFileContentTypeFromBytes(data)
+}
+
+func detectFileContentTypeFromBytes(data []byte) string {
 	if len(data) == 0 {
 		return "application/octet-stream"
 	}

@@ -20,6 +20,10 @@ use super::thread::Turn;
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// 客户端本地消息的稳定 ID。bridge 必须原样回显到 userMessage.clientId，
+    /// 否则刷新历史后只能拿重新生成的 item ID，iOS 会把同一条消息展示两次。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_user_message_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
     /// Sticky environment overrides. Opaque — pi has no equivalent.
@@ -66,6 +70,8 @@ pub struct TurnSteerParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_user_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
     pub expected_turn_id: String,
 }
@@ -88,6 +94,27 @@ pub struct TurnInterruptParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnInterruptResponse {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_start_params_round_trip_client_user_message_id() {
+        let params: TurnStartParams = serde_json::from_value(serde_json::json!({
+            "threadId": "thread-1",
+            "input": [{"type": "text", "text": "继续", "text_elements": []}],
+            "clientUserMessageId": "client-1"
+        }))
+        .unwrap();
+
+        assert_eq!(params.client_user_message_id.as_deref(), Some("client-1"));
+        assert_eq!(
+            serde_json::to_value(params).unwrap()["clientUserMessageId"],
+            "client-1"
+        );
+    }
+}
 
 // === review/start ==========================================================
 

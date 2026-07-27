@@ -47,7 +47,8 @@ type ManagedWebSocketOptions struct {
 }
 
 type ManagedWebSocketProcess struct {
-	cmd *exec.Cmd
+	cmd       *exec.Cmd
+	startedAt time.Time
 
 	waitCh chan error
 	doneCh chan struct{}
@@ -142,7 +143,12 @@ func StartManagedWebSocket(ctx context.Context, options ManagedWebSocketOptions)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("启动 codex app-server WebSocket 失败：%w", err)
 	}
-	process := &ManagedWebSocketProcess{cmd: cmd, waitCh: make(chan error, 1), doneCh: make(chan struct{})}
+	process := &ManagedWebSocketProcess{
+		cmd:       cmd,
+		startedAt: time.Now().UTC(),
+		waitCh:    make(chan error, 1),
+		doneCh:    make(chan struct{}),
+	}
 	go process.captureStderr(stderr)
 	go func() {
 		err := cmd.Wait()
@@ -203,6 +209,15 @@ func (p *ManagedWebSocketProcess) Diagnostics() Diagnostics {
 	diag.StderrTail = append([]string(nil), p.stderrTail...)
 	p.tailMu.Unlock()
 	return diag
+}
+
+// StartedAt 返回当前 resident Codex app-server 的真实启动时间。
+// 时间跟随子进程而不是 agentd HTTP 服务，运行时重启后不会沿用旧值。
+func (p *ManagedWebSocketProcess) StartedAt() time.Time {
+	if p == nil {
+		return time.Time{}
+	}
+	return p.startedAt
 }
 
 func (p *ManagedWebSocketProcess) Done() <-chan struct{} {

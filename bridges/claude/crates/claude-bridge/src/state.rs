@@ -6,9 +6,11 @@
 //! struct in a `Mutex`, so a long-running turn does not block unrelated
 //! requests.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 
 use alleycat_bridge_core::ProcessLauncher;
 use alleycat_bridge_core::session::Session;
@@ -42,7 +44,13 @@ pub use crate::index::{IndexEntry, ListFilter, ListPage, ListSort};
 /// Per-connection bridge state. Cheap to clone via `Arc`.
 pub struct ConnectionState {
     defaults: Mutex<ThreadDefaults>,
-    session: Arc<Session>,
+    /// 当前可交付通知的 bridge session。
+    ///
+    /// `ConnectionState` 会跨 WebSocket 连接复用，而 bridge-core 在长时间
+    /// 离线后可能为同一个稳定 session key 创建新的 `Session`。这里必须
+    /// 可重新绑定，否则后台 runtime 仍会把事件写进已经脱离 registry 的
+    /// 旧 replay ring。
+    session: RwLock<Arc<Session>>,
     claude_pool: Arc<ClaudePool>,
     thread_index: Arc<dyn ThreadIndexHandle>,
     /// Launcher used for `command/exec` shell tools. `None` falls back to a
@@ -189,7 +197,7 @@ impl ConnectionState {
     ) -> Self {
         Self {
             defaults: Mutex::new(defaults),
-            session,
+            session: RwLock::new(session),
             claude_pool,
             thread_index,
             launcher,
@@ -208,8 +216,18 @@ impl ConnectionState {
         self.trust_persisted_cwd
     }
 
-    pub fn session(&self) -> &Arc<Session> {
-        &self.session
+    pub fn session(&self) -> Arc<Session> {
+        Arc::clone(&self.session.read().unwrap())
+    }
+
+    /// 将长期存活的 runtime 状态重新绑定到本次 attach 解析出的 session。
+    /// 已存在的事件驱动器只持有 `ConnectionState`，所以后续通知会自动发往
+    /// 新 ring，而不需要跟随页面或 WebSocket 重建。
+    pub fn rebind_session(&self, session: Arc<Session>) {
+        let mut current = self.session.write().unwrap();
+        if !Arc::ptr_eq(&current, &session) {
+            *current = session;
+        }
     }
 
     pub fn set_capabilities(
@@ -223,7 +241,7 @@ impl ConnectionState {
             .and_then(|c| c.opt_out_notification_methods.as_ref())
             .map(|v| v.iter().cloned().collect())
             .unwrap_or_default();
-        self.session.set_capabilities(Capabilities {
+        self.session().set_capabilities(Capabilities {
             experimental_api: caps.is_some_and(|c| c.experimental_api),
             opt_out_notification_methods: opt_out,
             client_name,
@@ -233,11 +251,11 @@ impl ConnectionState {
     }
 
     pub fn capabilities(&self) -> Capabilities {
-        self.session.capabilities()
+        self.session().capabilities()
     }
 
     pub fn should_emit(&self, method: &str) -> bool {
-        self.session.should_emit(method)
+        self.session().should_emit(method)
     }
 
     pub fn defaults(&self) -> ThreadDefaults {
@@ -252,11 +270,40 @@ impl ConnectionState {
     pub fn send(&self, msg: JsonRpcMessage) -> Result<(), SendError> {
         match serde_json::to_value(&msg) {
             Ok(value) => {
-                self.session.enqueue(value);
+                self.session().enqueue(value);
                 Ok(())
             }
             Err(_) => Err(SendError::ConnectionClosed),
         }
+    }
+
+    /// Register a server→client request and put its frame on the wire in one
+    /// step. See [`Session::publish_server_request`]: registering first and
+    /// sending after leaves a window where a reattach delivers the prompt
+    /// twice.
+    pub async fn publish_server_request(
+        &self,
+        request_id: RequestId,
+        method: String,
+        params: Value,
+        frame: JsonRpcMessage,
+    ) -> Result<oneshot::Receiver<Result<Value, ServerRequestError>>, SendError> {
+        let payload = serde_json::to_value(&frame).map_err(|_| SendError::ConnectionClosed)?;
+        let (tx, rx) = oneshot::channel();
+        let key = request_id.to_string();
+        let (core_tx, core_rx) =
+            oneshot::channel::<Result<Value, alleycat_bridge_core::state::ServerRequestError>>();
+        self.session()
+            .publish_server_request(key, method, params, core_tx, payload);
+        tokio::spawn(async move {
+            let mapped = match core_rx.await {
+                Ok(Ok(v)) => Ok(v),
+                Ok(Err(e)) => Err(e.into()),
+                Err(_) => Err(ServerRequestError::ConnectionClosed),
+            };
+            let _ = tx.send(mapped);
+        });
+        Ok(rx)
     }
 
     pub async fn register_pending_request(
@@ -269,7 +316,8 @@ impl ConnectionState {
         let key = request_id.to_string();
         let (core_tx, core_rx) =
             oneshot::channel::<Result<Value, alleycat_bridge_core::state::ServerRequestError>>();
-        self.session.register_pending(key, method, params, core_tx);
+        self.session()
+            .register_pending(key, method, params, core_tx);
         tokio::spawn(async move {
             let mapped = match core_rx.await {
                 Ok(Ok(v)) => Ok(v),
@@ -304,12 +352,12 @@ impl ConnectionState {
                 Err(alleycat_bridge_core::state::ServerRequestError::TimedOut)
             }
         };
-        self.session
+        self.session()
             .resolve_pending(&request_id.to_string(), mapped)
     }
 
     pub async fn cancel_all_pending_requests(&self) {
-        self.session.cancel_all_pending();
+        self.session().cancel_all_pending();
     }
 
     pub fn claude_pool(&self) -> &Arc<ClaudePool> {
@@ -370,6 +418,9 @@ impl ConnectionState {
     pub fn record_turn_started(&self, thread_id: &str, turn_id: String, started_at: i64) {
         let mut logs = self.thread_logs.lock().unwrap();
         let list = logs.entry(thread_id.to_string()).or_default();
+        if list.iter().any(|turn| turn.turn_id == turn_id) {
+            return;
+        }
         list.push(RecordedTurn {
             turn_id,
             started_at,
@@ -419,6 +470,88 @@ impl ConnectionState {
         }
     }
 
+    /// 使用 Claude JSONL 权威历史修复 live cache。
+    ///
+    /// JSONL 没有可靠的失败/运行中 terminal 标记，所以只允许它补全已经成功
+    /// `Completed` 的 live turn；`InProgress` / `Failed` / `Interrupted` 必须保留
+    /// bridge 已观测到的状态，避免一次历史读取把真实失败伪装成成功。
+    pub fn reconcile_thread_log(&self, thread_id: &str, persisted: Vec<Turn>) -> ReconcileReport {
+        let mut logs = self.thread_logs.lock().unwrap();
+        let slot = logs.entry(thread_id.to_string()).or_default();
+        if persisted.is_empty() {
+            return ReconcileReport {
+                live_turns: slot.len(),
+                ..Default::default()
+            };
+        }
+
+        if slot.is_empty() {
+            let seeded = persisted.len();
+            *slot = persisted.into_iter().map(RecordedTurn::from).collect();
+            return ReconcileReport {
+                live_turns: 0,
+                persisted_turns: seeded,
+                seeded_turns: seeded,
+                ..Default::default()
+            };
+        }
+
+        let live_turns = slot.len();
+        let persisted_turns = persisted.len();
+        let mut matched_live = vec![false; slot.len()];
+        let mut reconciled = Vec::with_capacity(slot.len().max(persisted.len()));
+        let mut report = ReconcileReport {
+            live_turns,
+            persisted_turns,
+            ..Default::default()
+        };
+
+        for persisted_turn in persisted {
+            let matched = slot
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !matched_live[*index])
+                .filter_map(|(index, live)| {
+                    let score = turn_match_score(&persisted_turn.items, &live.items);
+                    (score > 0).then_some((index, score))
+                })
+                .min_by_key(|(index, score)| (Reverse(*score), *index))
+                .map(|(index, _)| index);
+
+            if let Some(index) = matched {
+                matched_live[index] = true;
+                let mut live = slot[index].clone();
+                if live.status == TurnStatus::Completed
+                    && persisted_has_successful_output(&persisted_turn.items)
+                    && !persisted_has_successful_output(&live.items)
+                    && persisted_turn.items != live.items
+                {
+                    // 只修补“live 只有用户输入、JSONL 已有完整输出”的明确缺口。
+                    // 两边都已有输出时，items 数量相等/更多并不能证明 persisted 是
+                    // superset；整体替换会把刚收到的 live 内容回滚成较旧快照。
+                    live.items = persisted_turn.items;
+                    report.repaired_turns += 1;
+                } else if live.status != TurnStatus::Completed {
+                    report.protected_turns += 1;
+                }
+                reconciled.push(live);
+            } else {
+                reconciled.push(RecordedTurn::from(persisted_turn));
+                report.seeded_turns += 1;
+            }
+        }
+
+        // JSONL flush 可能落后于实时事件；所有尚未在权威历史出现的 live turn
+        // 按原顺序保留在尾部，其中也包括没有用户消息锚点的自主 turn。
+        for (index, live) in slot.iter().enumerate() {
+            if !matched_live[index] {
+                reconciled.push(live.clone());
+            }
+        }
+        *slot = reconciled;
+        report
+    }
+
     pub fn thread_log(&self, thread_id: &str) -> Vec<Turn> {
         let logs = self.thread_logs.lock().unwrap();
         let Some(list) = logs.get(thread_id) else {
@@ -442,6 +575,250 @@ impl ConnectionState {
             })
             .collect()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alleycat_codex_proto::UserInput;
+
+    async fn test_state() -> Arc<ConnectionState> {
+        let dir = tempfile::tempdir().unwrap();
+        let index = alleycat_bridge_core::ThreadIndex::<crate::index::ClaudeSessionRef>::open_at(
+            dir.path().join("threads.json"),
+        )
+        .await
+        .unwrap();
+        std::mem::forget(dir);
+        ConnectionState::for_test(
+            Arc::new(crate::pool::ClaudePool::new("/dev/null")),
+            index,
+            Default::default(),
+        )
+        .0
+    }
+
+    fn user(id: &str, text: &str) -> ThreadItem {
+        ThreadItem::UserMessage {
+            id: id.into(),
+            content: vec![UserInput::Text {
+                text: text.into(),
+                text_elements: Vec::new(),
+            }],
+            client_id: None,
+        }
+    }
+
+    fn persisted_turn(text: &str) -> Turn {
+        Turn {
+            id: "disk-turn".into(),
+            items: vec![
+                user("disk-user", text),
+                ThreadItem::AgentMessage {
+                    id: "disk-agent".into(),
+                    text: "权威历史中的完整回复".into(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            ],
+            items_view: alleycat_codex_proto::default_items_view(),
+            status: TurnStatus::Completed,
+            error: None,
+            started_at: Some(1),
+            completed_at: Some(2),
+            duration_ms: Some(1_000),
+        }
+    }
+
+    #[tokio::test]
+    async fn persisted_success_repairs_completed_live_turn() {
+        let state = test_state().await;
+        state.record_turn_started("thread", "live-turn".into(), 1);
+        state.record_item("thread", "live-turn", user("live-user", "五分钟后回复"));
+        state.record_turn_completed("thread", "live-turn", 2, TurnStatus::Completed, None);
+
+        let report = state.reconcile_thread_log("thread", vec![persisted_turn("五分钟后回复")]);
+        assert_eq!(report.repaired_turns, 1);
+        let turns = state.thread_log("thread");
+        assert_eq!(turns[0].id, "live-turn", "live turn id must stay stable");
+        assert!(turns[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::AgentMessage { text, .. } if text.contains("完整回复"))));
+    }
+
+    #[tokio::test]
+    async fn persisted_success_does_not_overwrite_active_or_failed_terminal() {
+        for status in [TurnStatus::InProgress, TurnStatus::Failed] {
+            let state = test_state().await;
+            state.record_turn_started("thread", "live-turn".into(), 1);
+            state.record_item("thread", "live-turn", user("live-user", "同一问题"));
+            if status == TurnStatus::Failed {
+                state.record_turn_completed(
+                    "thread",
+                    "live-turn",
+                    2,
+                    status,
+                    Some(TurnError {
+                        message: "真实失败".into(),
+                        codex_error_info: None,
+                        additional_details: None,
+                    }),
+                );
+            }
+
+            let report = state.reconcile_thread_log("thread", vec![persisted_turn("同一问题")]);
+            assert_eq!(report.protected_turns, 1);
+            let turn = &state.thread_log("thread")[0];
+            assert_eq!(turn.status, status);
+            assert!(
+                !turn
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, ThreadItem::AgentMessage { .. }))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn autonomous_turn_reconciliation_matches_without_user_anchor_and_does_not_duplicate() {
+        let state = test_state().await;
+        state.record_turn_started("thread", "live-autonomous".into(), 10);
+        state.record_item(
+            "thread",
+            "live-autonomous",
+            ThreadItem::AgentMessage {
+                id: "live-agent".into(),
+                text: "⏰ 五分钟到了".into(),
+                phase: None,
+                memory_citation: None,
+            },
+        );
+        state.record_turn_completed("thread", "live-autonomous", 11, TurnStatus::Completed, None);
+
+        let persisted = Turn {
+            id: "disk-autonomous".into(),
+            items: vec![
+                ThreadItem::AgentMessage {
+                    id: "disk-agent-partial".into(),
+                    text: "⏰ 五分钟到了".into(),
+                    phase: None,
+                    memory_citation: None,
+                },
+                ThreadItem::AgentMessage {
+                    id: "disk-agent-final".into(),
+                    text: "当前时间 14:06:06".into(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            ],
+            items_view: alleycat_codex_proto::default_items_view(),
+            status: TurnStatus::Completed,
+            error: None,
+            started_at: Some(10),
+            completed_at: Some(11),
+            duration_ms: Some(1_000),
+        };
+
+        let report = state.reconcile_thread_log("thread", vec![persisted]);
+        assert_eq!(report.repaired_turns, 0);
+        let turns = state.thread_log("thread");
+        assert_eq!(turns.len(), 1, "同一自主 turn 不应 seed 后再 append");
+        assert_eq!(turns[0].id, "live-autonomous");
+        assert!(turns[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::AgentMessage { text, .. } if text.contains("五分钟到了"))));
+        assert!(!turns[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::AgentMessage { text, .. } if text.contains("14:06:06"))));
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReconcileReport {
+    pub live_turns: usize,
+    pub persisted_turns: usize,
+    pub seeded_turns: usize,
+    pub repaired_turns: usize,
+    pub protected_turns: usize,
+}
+
+impl From<Turn> for RecordedTurn {
+    fn from(turn: Turn) -> Self {
+        Self {
+            turn_id: turn.id,
+            started_at: turn.started_at.unwrap_or_default(),
+            completed_at: turn.completed_at,
+            status: turn.status,
+            error: turn.error,
+            items: turn.items,
+        }
+    }
+}
+
+fn turn_user_key(items: &[ThreadItem]) -> Option<String> {
+    items.iter().find_map(|item| match item {
+        ThreadItem::UserMessage { content, .. } => serde_json::to_string(content).ok(),
+        _ => None,
+    })
+}
+
+// 先以用户输入锚定普通 turn；自主 turn 没有 user item，则使用不含临时 id
+// 的可见内容指纹匹配。没有任何可见内容重合时不能仅凭顺序合并，否则两个
+// 相邻但不同的自主 turn 会被误当成同一条并覆盖 live 数据。
+fn turn_match_score(persisted: &[ThreadItem], live: &[ThreadItem]) -> u8 {
+    match (turn_user_key(persisted), turn_user_key(live)) {
+        (Some(left), Some(right)) => return u8::from(left == right) * 3,
+        (Some(_), None) | (None, Some(_)) => return 0,
+        (None, None) => {}
+    }
+    let persisted_visible = turn_visible_signatures(persisted);
+    let live_visible = turn_visible_signatures(live);
+    if persisted_visible
+        .iter()
+        .any(|signature| live_visible.contains(signature))
+    {
+        2
+    } else {
+        0
+    }
+}
+
+fn turn_visible_signatures(items: &[ThreadItem]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            ThreadItem::AgentMessage { text, .. } => Some(format!("agent:{text}")),
+            ThreadItem::Plan { text, .. } => Some(format!("plan:{text}")),
+            ThreadItem::Reasoning {
+                summary, content, ..
+            } => Some(format!("reasoning:{summary:?}:{content:?}")),
+            ThreadItem::CommandExecution {
+                command,
+                aggregated_output,
+                ..
+            } => Some(format!("command:{command}:{aggregated_output:?}")),
+            ThreadItem::HookPrompt { fragments, .. } => Some(format!("hook:{fragments:?}")),
+            _ => None,
+        })
+        .collect()
+}
+
+fn persisted_has_successful_output(items: &[ThreadItem]) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item,
+            ThreadItem::AgentMessage { .. }
+                | ThreadItem::Plan { .. }
+                | ThreadItem::CommandExecution { .. }
+                | ThreadItem::FileChange { .. }
+                | ThreadItem::McpToolCall { .. }
+                | ThreadItem::DynamicToolCall { .. }
+                | ThreadItem::CollabAgentToolCall { .. }
+        )
+    })
 }
 
 #[derive(Debug, thiserror::Error)]

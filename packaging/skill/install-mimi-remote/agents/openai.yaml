@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mimi Remote 安装与 Runtime"
+  short_description: "安装菜单栏 App，维护 Codex / Claude Runtime 与移动端连接"
+  default_prompt: "使用 $install-mimi-remote 安装或维护 Mimi Remote Mac，并安全验证 Codex / Claude Runtime 与移动端连接。"

@@ -43,8 +43,8 @@ struct WorkbenchLayout: Equatable {
 
         if usesCompactMetrics {
             projectColumn = ColumnWidth(min: 220, ideal: 260, max: 300)
-            // 手机导航栏同时有返回、连接状态、日志和设置按钮；标题必须主动让位，避免挤压工具按钮。
-            titleMaxWidth = max(86, min(150, containerWidth - 250))
+            // 手机端维护动作已经收进单一菜单，标题可以获得接近 Claude 的两行阅读宽度。
+            titleMaxWidth = max(160, min(230, containerWidth - 160))
         } else if isTightPadWidth {
             projectColumn = ColumnWidth(min: 240, ideal: 280, max: 320)
             titleMaxWidth = 240
@@ -105,78 +105,31 @@ struct SessionInspectorPresentation: ViewModifier {
     }
 }
 
-struct AgentWorkbenchTitle: View {
-    @EnvironmentObject private var sessionStore: SessionStore
+struct WorkbenchPageHeader: View {
     @EnvironmentObject private var themeStore: ThemeStore
-    @Environment(\.colorScheme) private var colorScheme
-    let maxWidth: CGFloat
-    let horizontalOffset: CGFloat
+    let title: String
+    let subtitle: String
+    let tokens: ThemeTokens
 
     var body: some View {
-        let tokens = themeStore.tokens(for: colorScheme)
-
-        Group {
-            if shouldShowTitle {
-                VStack(spacing: 2) {
-                    Text(primaryText)
-                        .font(themeStore.codeFont(.subheadline, weight: .semibold))
-                        .foregroundStyle(tokens.primaryText)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                    if let secondaryText {
-                        HStack(spacing: 5) {
-                            if historyProgress != nil {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .tint(tokens.tertiaryText)
-                                    .frame(width: 10, height: 10)
-                            }
-                            Text(secondaryText)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.76)
-                        }
-                        .font(themeStore.codeFont(.caption2))
-                        .foregroundStyle(tokens.tertiaryText)
-                    }
-                }
-                .accessibilityElement(children: .combine)
-            } else {
-                Color.clear
-                    .frame(width: 1, height: 1)
-                    .accessibilityHidden(true)
-            }
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(themeStore.uiFont(.title2, weight: .semibold))
+                .foregroundStyle(tokens.primaryText)
+            Text(subtitle)
+                .font(themeStore.uiFont(.callout))
+                .foregroundStyle(tokens.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: maxWidth)
-        .offset(x: horizontalOffset)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
 
-    private var historyProgress: HistoryLoadProgress? {
-        sessionStore.historyLoadProgress(sessionID: sessionStore.selectedSessionID)
-    }
-
-    private var shouldShowTitle: Bool {
-        historyProgress != nil ||
-            sessionStore.selectedSession != nil ||
-            sessionStore.selectedProject != nil
-    }
-
-    private var primaryText: String {
-        if let session = sessionStore.selectedSession {
-            return session.project.isEmpty ? L10n.text("ui.workspace") : session.project
-        }
-        return sessionStore.selectedProject?.name ?? L10n.text("ui.session")
-    }
-
-    private var secondaryText: String? {
-        if let historyProgress {
-            // 历史请求没有真实网络进度，标题区只保留轻量状态，避免 32% 这类假进度占据主内容。
-            return L10n.format("ui.currently_value", historyProgress.title)
-        }
-        if let session = sessionStore.selectedSession {
-            return session.title.isEmpty ? session.dir : session.title
-        }
-        return sessionStore.selectedProject?.path
-    }
+enum WorkbenchPageLayout {
+    static let maxContentWidth: CGFloat = 820
+    static let regularPadding: CGFloat = 24
+    static let compactPadding: CGFloat = 20
+    static let compactBottomPadding: CGFloat = 132
 }
 
 struct StatusPill: View {

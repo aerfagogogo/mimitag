@@ -25,17 +25,22 @@ struct VoiceMicButton: View {
                     Image(systemName: isRecording ? "stop.fill" : "mic.fill")
                 }
             }
-            .foregroundStyle(tokens.primaryAction)
+            // 空闲态和其它工具按钮保持中性；录音、准备和转写才使用主题紫表达活动状态。
+            .foregroundStyle(
+                isRecording || isPreparing || isTranscribing
+                    ? tokens.primaryAction
+                    : tokens.primaryText
+            )
             .frame(width: 44, height: 44)
-            .background(tokens.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Color.clear, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             .modifier(
                 ComposerFlatControlSurface(
                     tokens: tokens,
-                    cornerRadius: 12,
+                    cornerRadius: 22,
                     isEmphasized: false
                 )
             )
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
         .disabled(isPreparing || isTranscribing)
@@ -81,8 +86,9 @@ struct ComposerPressButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            // 平铺控件只用明度变化响应触摸，不再通过缩放和下沉模拟实体键程。
-            .opacity(configuration.isPressed ? 0.68 : 1)
+            // 玻璃键帽用很短的缩放和明度变化确认按压；降低动态效果时只保留明度反馈。
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
             .animation(
                 .easeOut(duration: reduceMotion ? 0 : 0.08),
                 value: configuration.isPressed
@@ -90,27 +96,38 @@ struct ComposerPressButtonStyle: ButtonStyle {
     }
 }
 
-/// Composer 控件统一使用实色和细边界分组，层级来自布局关系而不是高光或投影。
+/// Composer 控件使用页面背景色，在输入卡内部形成一层安静但明确的操作表面。
 struct ComposerFlatControlSurface: ViewModifier {
     let tokens: ThemeTokens
     let cornerRadius: CGFloat
     let isEmphasized: Bool
 
+    init(
+        tokens: ThemeTokens,
+        cornerRadius: CGFloat,
+        isEmphasized: Bool
+    ) {
+        self.tokens = tokens
+        self.cornerRadius = cornerRadius
+        self.isEmphasized = isEmphasized
+    }
+
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
     }
 
-    private var borderColor: Color {
-        if isEmphasized {
-            return .clear
-        }
-        return tokens.border.opacity(tokens.resolvedScheme == .light ? 0.62 : 0.82)
+    private var restingFill: Color {
+        guard !isEmphasized else { return .clear }
+        return tokens.background
     }
 
     func body(content: Content) -> some View {
         content
-            .overlay {
-                shape.strokeBorder(borderColor, lineWidth: 0.75)
+            .background {
+                // 可见键帽约 36pt，但外层 contentShape 仍保持 44pt 命中面积。
+                shape
+                    .fill(restingFill)
+                    .padding(4)
             }
     }
 }
@@ -322,6 +339,28 @@ struct AdvancedTurnOptionsSheet: View {
                     TextField(L10n.text("ui.service_name"), text: optionalStringBinding(\.serviceName))
                 }
 
+                Section(L10n.text("ui.reasoning_and_service_tier")) {
+                    // 标准选择器只暴露四档；完整协议值集中在开发者高级选项中，
+                    // 让 Low、Codex Max、auto 和 flex 仍可显式配置而不污染普通入口。
+                    Picker(L10n.text("ui.reasoning_effort"), selection: $draft.reasoningEffort) {
+                        Text(L10n.text("ui.default_option"))
+                            .tag(Optional<CodexAppServerReasoningEffort>.none)
+                        ForEach(CodexAppServerReasoningEffort.allCases) { effort in
+                            Text(ModelReasoningGridCatalog.effortTitle(effort))
+                                .tag(Optional(effort))
+                        }
+                    }
+
+                    Picker(L10n.text("ui.service_tier"), selection: $draft.serviceTier) {
+                        Text(L10n.text("ui.default_option"))
+                            .tag(Optional<String>.none)
+                        // Service tier 是协议枚举值，展示时保持原值，不能参与本地化。
+                        Text(verbatim: "auto").tag(Optional("auto"))
+                        Text(verbatim: "priority").tag(Optional("priority"))
+                        Text(verbatim: "flex").tag(Optional("flex"))
+                    }
+                }
+
                 Section(L10n.text("ui.thread_source")) {
                     TextField(L10n.text("ui.session_start_source"), text: optionalStringBinding(\.sessionStartSource))
                     TextField(L10n.text("ui.thread_source"), text: optionalStringBinding(\.threadSource))
@@ -389,6 +428,8 @@ struct AdvancedTurnOptionsSheet: View {
     private func clearAdvancedOptions() {
         draft.runtimeProvider = nil
         draft.modelProvider = nil
+        draft.reasoningEffort = nil
+        draft.serviceTier = nil
         draft.config = nil
         draft.baseInstructions = nil
         draft.developerInstructions = nil

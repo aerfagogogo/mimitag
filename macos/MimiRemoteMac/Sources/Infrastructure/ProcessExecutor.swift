@@ -74,6 +74,9 @@ actor ProcessExecutor {
 
         let stdout = try await stdoutRead
         let stderr = try await stderrRead
+        if Task.isCancelled {
+            throw CancellationError()
+        }
         if stdout.exceededLimit || stderr.exceededLimit {
             throw ProcessExecutorError.outputTooLarge
         }

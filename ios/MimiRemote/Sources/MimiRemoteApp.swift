@@ -72,6 +72,7 @@ struct SessionNotificationRoute: Equatable, Hashable {
 @MainActor
 final class SessionNotificationResponseAdapter: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     @Published private(set) var pendingRoute: SessionNotificationRoute?
+    private var visibleSessionRoutesByScene: [UUID: SessionNotificationRoute] = [:]
 
     @discardableResult
     func receive(userInfo: [AnyHashable: Any]) -> Bool {
@@ -85,6 +86,30 @@ final class SessionNotificationResponseAdapter: NSObject, ObservableObject, UNUs
     func consume(_ route: SessionNotificationRoute) {
         guard pendingRoute == route else { return }
         pendingRoute = nil
+    }
+
+    /// 每个 Scene 独立登记当前真正可见的会话；任一窗口正在展示目标会话时，
+    /// 对应运行态通知都不应再用横幅和声音重复打断用户。
+    func setVisibleSessionRoute(_ route: SessionNotificationRoute?, for sceneID: UUID) {
+        if let route {
+            visibleSessionRoutesByScene[sceneID] = route
+        } else {
+            visibleSessionRoutesByScene.removeValue(forKey: sceneID)
+        }
+    }
+
+    func presentationOptions(
+        forNotificationIdentifier identifier: String,
+        userInfo: [AnyHashable: Any]
+    ) -> UNNotificationPresentationOptions {
+        guard UserNotificationSessionReminderScheduler.isRuntimeNotificationID(identifier),
+              let route = SessionNotificationRoute(userInfo: userInfo),
+              visibleSessionRoutesByScene.values.contains(route)
+        else {
+            // 路由缺失或状态不确定时继续提醒，避免把真正需要处理的后台事件静默掉。
+            return [.banner, .sound]
+        }
+        return []
     }
 
     nonisolated func userNotificationCenter(
@@ -105,8 +130,14 @@ final class SessionNotificationResponseAdapter: NSObject, ObservableObject, UNUs
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // 前台仍展示通知，但只有用户明确点击后才进入 didReceive 路由。
-        completionHandler([.banner, .sound])
+        let request = notification.request
+        Task { @MainActor [weak self] in
+            let options = self?.presentationOptions(
+                forNotificationIdentifier: request.identifier,
+                userInfo: request.content.userInfo
+            ) ?? [.banner, .sound]
+            completionHandler(options)
+        }
     }
 }
 

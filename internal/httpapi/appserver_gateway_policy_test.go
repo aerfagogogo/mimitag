@@ -474,6 +474,29 @@ func TestAppServerGatewayPreservesDefaultCollaborationMode(t *testing.T) {
 
 	authorizeGatewayThread(t, conn, received, projectDir, "thread-default-mode")
 
+	planRequest := []byte(fmt.Sprintf(
+		`{"id":9,"method":"turn/start","params":{"threadId":"thread-default-mode","cwd":%q,"input":[{"type":"text","text":"plan"}],"approvalPolicy":"on-request","approvalsReviewer":"user","collaborationMode":{"mode":"plan","settings":{"reasoning_effort":"xhigh","developer_instructions":null}},"sandboxPolicy":{"type":"workspaceWrite","writableRoots":[%q],"networkAccess":false}}}`,
+		projectDir,
+		projectDir,
+	))
+	if err := conn.WriteMessage(websocket.TextMessage, planRequest); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-received:
+		params := decodeGatewayParamsForTest(t, got)
+		collaboration, ok := params["collaborationMode"].(map[string]any)
+		if !ok || collaboration["mode"] != "plan" {
+			t.Fatalf("第一条 turn/start 应保持 Plan Mode：%s", got)
+		}
+		settings, ok := collaboration["settings"].(map[string]any)
+		if !ok || settings["developer_instructions"] != nil {
+			t.Fatalf("Plan Mode 应继续交给 app-server 注入内置指令：%v", collaboration["settings"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake upstream 未收到 Plan Mode 帧")
+	}
+
 	request := []byte(fmt.Sprintf(
 		`{"id":10,"method":"turn/start","params":{"threadId":"thread-default-mode","cwd":%q,"input":[{"type":"text","text":"hi"}],"approvalPolicy":"on-request","approvalsReviewer":"user","collaborationMode":{"mode":"default","settings":{"reasoning_effort":"xhigh","developer_instructions":null}},"sandboxPolicy":{"type":"workspaceWrite","writableRoots":[%q],"networkAccess":false}}}`,
 		projectDir,
@@ -491,7 +514,7 @@ func TestAppServerGatewayPreservesDefaultCollaborationMode(t *testing.T) {
 			t.Fatalf("turn/start 应保留 collaborationMode.mode=default：%s", got)
 		}
 		settings, ok := collaboration["settings"].(map[string]any)
-		if !ok || settings["reasoning_effort"] != "xhigh" || settings["developer_instructions"] != nil {
+		if !ok || settings["reasoning_effort"] != "xhigh" || settings["developer_instructions"] != gatewayDefaultCollaborationInstructions {
 			t.Fatalf("default collaborationMode settings 应安全转发：%v", collaboration["settings"])
 		}
 		if _, ok := settings["model"]; ok {
@@ -1286,6 +1309,46 @@ func TestAppServerGatewayRejectsInvalidThreadNameAndReviewParams(t *testing.T) {
 	assertNoUpstreamFrame(t, received)
 }
 
+// The pending table is per-connection but the prompts it guards are not: a
+// resident bridge keeps an approval open across a disconnect and lists it in
+// serverRequest/replay on attach. Those ids have to be registered from the
+// notification, or the user's answer comes back and gets rejected as never
+// having been issued — a prompt that reappears and then cannot be answered.
+func TestAppServerGatewayRegistersReplayedServerRequests(t *testing.T) {
+	policy := &appServerGatewayPolicy{
+		runtimeID:             "claude",
+		pendingServerRequests: map[string]appServerGatewayPendingServerRequest{},
+	}
+	replay := []byte(`{"jsonrpc":"2.0","method":"serverRequest/replay","params":{"outstanding":[` +
+		`{"id":"req-abc","method":"item/commandExecution/requestApproval","params":{"threadId":"thr_1"}},` +
+		`{"id":7,"method":"item/tool/requestUserInput","params":{"threadId":"thr_1"}},` +
+		`{"id":"req-nope","method":"account/chatgptAuthTokens/refresh","params":{}}]}}`)
+	got, forward, policyErr := policy.observeUpstreamFrame(websocket.TextMessage, replay)
+	if policyErr != nil || !forward || !bytes.Equal(got, replay) {
+		t.Fatalf("replay 通知应原样转发 forward=%v err=%+v got=%s", forward, policyErr, got)
+	}
+
+	for _, expected := range []struct {
+		rawID  string
+		method string
+	}{
+		{`"req-abc"`, "item/commandExecution/requestApproval"},
+		{`7`, "item/tool/requestUserInput"},
+	} {
+		rawID := json.RawMessage(expected.rawID)
+		frame := &appServerGatewayFrame{ID: &rawID, Result: json.RawMessage(`{"decision":"approve"}`)}
+		if _, err := policy.validateClientResponse([]byte(`{"id":`+expected.rawID+`,"result":{"decision":"approve"}}`), frame); err != nil {
+			t.Fatalf("重放的 server request 应可被回答 id=%s err=%v", expected.rawID, err)
+		}
+	}
+
+	// 移动端渲染不了的方法不登记：它永远不会被回答，登记只会占着 pending 表。
+	unsupported := json.RawMessage(`"req-nope"`)
+	if _, ok := policy.consumePendingServerRequest(&unsupported); ok {
+		t.Fatal("未被移动端支持的重放请求不应登记 pending")
+	}
+}
+
 func TestAppServerGatewayServerRequestAllowlistMatchesMobileCapabilities(t *testing.T) {
 	policy := &appServerGatewayPolicy{
 		runtimeID:             "codex",
@@ -1861,7 +1924,45 @@ func TestAppServerHistoryImageRedactionRewritesImageGenerationResult(t *testing.
 	}
 }
 
-func TestAppServerHistoryImageRedactionSkipsNonImageGenerationBlobs(t *testing.T) {
+func TestAppServerGatewayNotificationRedactsInlineImagesForCodexAndClaude(t *testing.T) {
+	pngBytes := append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, bytes.Repeat([]byte{0xAB}, 20<<10)...)
+	resultPayload := base64.StdEncoding.EncodeToString(pngBytes)
+	// item/completed 通知帧：有 method、无 id，走 observeUpstreamFrame 的通知分支。
+	notification := []byte(`{"method":"item/completed","params":{"item":{"type":"imageGeneration","id":"ig_1","status":"completed","result":"` + resultPayload + `","savedPath":"/tmp/mockup.png"}}}`)
+
+	// codex 与 claude 两条 runtime 都必须把直播通知里的裸 base64 改写成短 URL。
+	for _, runtimeID := range []string{"codex", "claude"} {
+		t.Run(runtimeID, func(t *testing.T) {
+			router := &Router{historyMedia: newAppServerHistoryMediaStore()}
+			policy := &appServerGatewayPolicy{router: router, runtimeID: runtimeID}
+			forwarded, forward, policyErr := policy.observeUpstreamFrame(websocket.TextMessage, notification)
+			if policyErr != nil || !forward {
+				t.Fatalf("通知帧应转发：forward=%v err=%+v", forward, policyErr)
+			}
+			if bytes.Contains(forwarded, []byte(resultPayload)) {
+				t.Fatalf("%s 直播通知不应保留裸 base64：len=%d", runtimeID, len(forwarded))
+			}
+			if !bytes.Contains(forwarded, []byte(appServerHistoryMediaURLPrefix)) {
+				t.Fatalf("%s 直播通知应替换为 media URL：%s", runtimeID, forwarded)
+			}
+		})
+	}
+
+	// 未知 runtime 不改写，保持既有透传语义。
+	t.Run("unknown-runtime-passthrough", func(t *testing.T) {
+		router := &Router{historyMedia: newAppServerHistoryMediaStore()}
+		policy := &appServerGatewayPolicy{router: router, runtimeID: "gemini"}
+		forwarded, forward, policyErr := policy.observeUpstreamFrame(websocket.TextMessage, notification)
+		if policyErr != nil || !forward {
+			t.Fatalf("通知帧应转发：forward=%v err=%+v", forward, policyErr)
+		}
+		if !bytes.Equal(forwarded, notification) {
+			t.Fatalf("未知 runtime 通知应原样透传")
+		}
+	})
+}
+
+func TestAppServerHistoryImageRedactionSkipsNonImageBlobsAndSmallRawImages(t *testing.T) {
 	router := &Router{historyMedia: newAppServerHistoryMediaStore()}
 
 	// 长文本 base64（可解码但不是图片）不应被改写。
@@ -1878,11 +1979,92 @@ func TestAppServerHistoryImageRedactionSkipsNonImageGenerationBlobs(t *testing.T
 		t.Fatalf("小图 result 不应被改写")
 	}
 
-	// 非 imageGeneration item 的 result 不做嗅探。
+	// 明确图片字段中的大图会被识别；普通字段不做全局 base64 嗅探。
 	bigPNG := base64.StdEncoding.EncodeToString(append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, bytes.Repeat([]byte{0x02}, 20<<10)...))
-	payload = []byte(`{"id":3,"result":{"data":[{"items":[{"type":"mcpToolCall","result":"` + bigPNG + `"}]}]}}`)
+	payload = []byte(`{"id":3,"result":{"data":[{"items":[{"type":"agentMessage","text":"` + bigPNG + `"}]}]}}`)
 	if _, changed := router.redactInlineHistoryImagesInGatewayResponse(payload); changed {
-		t.Fatalf("mcpToolCall result 当前不在改写范围")
+		t.Fatalf("普通文本字段不应被当成图片改写")
+	}
+}
+
+func TestAppServerHistoryImageRedactionRewritesProtocolVariants(t *testing.T) {
+	router := &Router{historyMedia: newAppServerHistoryMediaStore()}
+	pngBytes := append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, bytes.Repeat([]byte{0x03}, 20<<10)...)
+	rawImage := base64.StdEncoding.EncodeToString(pngBytes)
+	dataURL := "data:image/png;base64," + rawImage
+	payload := []byte(`{"id":4,"result":{"thread":{"turns":[{"items":[` +
+		`{"type":"userMessage","content":[{"type":"image","data":"` + rawImage + `"}]},` +
+		`{"type":"mcpToolCall","url":"` + dataURL + `","result":"` + rawImage + `"},` +
+		`{"type":"dynamicToolCall","result":"` + rawImage + `"},` +
+		`{"type":"mcpToolCall","result":{"_meta":{"codex/toolSurface":{"screenshot":{"url":"` + dataURL + `","pageUrl":"https://example.test","tabId":"tab-1"}}}}}` +
+		`]}]}}}`)
+
+	rewritten, changed := router.redactInlineHistoryImagesInGatewayResponse(payload)
+	if !changed {
+		t.Fatalf("redaction 应识别 image.data 和工具图片字段")
+	}
+	if bytes.Contains(rewritten, []byte(rawImage)) || bytes.Contains(rewritten, []byte("data:image/")) {
+		t.Fatalf("redaction 不应保留协议变体中的 inline 图片：len=%d", len(rewritten))
+	}
+
+	var frame struct {
+		Result struct {
+			Thread struct {
+				Turns []struct {
+					Items []map[string]any `json:"items"`
+				} `json:"turns"`
+			} `json:"thread"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(rewritten, &frame); err != nil {
+		t.Fatalf("redacted 响应不是合法 JSON：%v", err)
+	}
+	items := frame.Result.Thread.Turns[0].Items
+	image := items[0]["content"].([]any)[0].(map[string]any)
+	if image["data"] != nil || !strings.HasPrefix(image["url"].(string), appServerHistoryMediaURLPrefix) {
+		t.Fatalf("image.data 应规范化成按需读取 URL：%+v", image)
+	}
+	if image["contentType"] != "image/png" || image["redacted"] != true {
+		t.Fatalf("image.data 应保留图片元数据：%+v", image)
+	}
+
+	mcp := items[1]
+	dynamic := items[2]
+	for _, check := range []struct {
+		name   string
+		object map[string]any
+		fields []string
+	}{
+		{name: "mcpToolCall", object: mcp, fields: []string{"url", "result"}},
+		{name: "dynamicToolCall", object: dynamic, fields: []string{"result"}},
+	} {
+		for _, field := range check.fields {
+			value, _ := check.object[field].(string)
+			if !strings.HasPrefix(value, appServerHistoryMediaURLPrefix) || check.object[field+"Redacted"] != true {
+				t.Fatalf("%s.%s 应替换为按需读取 URL：%+v", check.name, field, check.object)
+			}
+			if check.object[field+"ContentType"] != "image/png" {
+				t.Fatalf("%s.%s 应保留 content type：%+v", check.name, field, check.object)
+			}
+		}
+	}
+
+	nestedResult := items[3]["result"].(map[string]any)
+	nestedMeta := nestedResult["_meta"].(map[string]any)
+	toolSurface := nestedMeta["codex/toolSurface"].(map[string]any)
+	screenshot := toolSurface["screenshot"].(map[string]any)
+	if !strings.HasPrefix(screenshot["url"].(string), appServerHistoryMediaURLPrefix) ||
+		screenshot["urlRedacted"] != true ||
+		screenshot["urlContentType"] != "image/png" {
+		t.Fatalf("嵌套 toolSurface screenshot.url 应替换为按需读取 URL：%+v", screenshot)
+	}
+	if screenshot["pageUrl"] != "https://example.test" || screenshot["tabId"] != "tab-1" {
+		t.Fatalf("截图关联元数据不应被改写：%+v", screenshot)
+	}
+
+	// 多种协议形态引用同一张图时，media store 应按内容去重。
+	if got := len(router.historyMedia.entries); got != 1 {
+		t.Fatalf("相同图片应只保存一份，got=%d", got)
 	}
 }
 

@@ -40,7 +40,7 @@ use alleycat_bridge_core::{
 use anyhow::{Context, Result, anyhow};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -116,11 +116,40 @@ pub enum ClaudeProcessError {
     #[error("control request `{request_id}` failed: {message}")]
     ControlError { request_id: String, message: String },
 
+    #[error("runtime override `{field}`={value:?} failed: {source}")]
+    RuntimeOverride {
+        field: &'static str,
+        value: String,
+        #[source]
+        source: Box<ClaudeProcessError>,
+    },
+
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+// Claude Code versions have used both `subtype:"error"` and a nominally
+// successful control response carrying `{accepted:false}` for rejected
+// setters. Normalize the latter so callers never treat a refused model as
+// applied and cache it as live runtime state.
+fn rejected_control_response(response: Option<&serde_json::Value>) -> Option<String> {
+    let value = response?;
+    if value.get("accepted").and_then(serde_json::Value::as_bool) != Some(false) {
+        return None;
+    }
+    for key in ["error", "message", "reason"] {
+        if let Some(message) = value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|message| !message.trim().is_empty())
+        {
+            return Some(message.to_string());
+        }
+    }
+    Some("Claude runtime did not accept the control request".to_string())
 }
 
 /// Handle to a single live `claude -p` subprocess. Cloning via `Arc` shares
@@ -138,6 +167,9 @@ pub struct ClaudeProcessHandle {
     writer_tx: mpsc::UnboundedSender<String>,
     /// Broadcast end for events. Cloned via `subscribe_events()`.
     events_tx: broadcast::Sender<ClaudeEvent>,
+    /// 独立于 broadcast sender 的进程退出信号。handle 本身会持有
+    /// `events_tx`，因此仅等待 broadcast::Closed 无法识别子进程异常退出。
+    exit_tx: watch::Sender<bool>,
     /// Init readiness slot. Set by the reader task when the first
     /// `system/init` line lands; `wait_for_init` reads it back.
     init_slot: Arc<InitSlot>,
@@ -146,9 +178,9 @@ pub struct ClaudeProcessHandle {
     /// peels each `control_response` out, looks up the entry, and resolves
     /// the oneshot. Cancelled entries (timeout / process exit) are dropped.
     pending_controls: Arc<Mutex<HashMap<String, oneshot::Sender<ControlResponseBody>>>>,
-    /// Per-handle live runtime config — model / thinking-tokens budget /
+    /// Per-handle live runtime config — model / native effort level /
     /// permission mode currently applied to the child process. Mutated only
-    /// after a successful `set_*` control_request, so `apply_runtime_overrides`
+    /// after a successful control_request, so `apply_runtime_overrides`
     /// can diff and skip no-op writes (avoids burning a request RTT per turn
     /// when nothing changes).
     runtime_state: Arc<Mutex<RuntimeState>>,
@@ -176,7 +208,7 @@ struct InitSlot {
 #[derive(Debug, Default)]
 struct RuntimeState {
     model: Option<String>,
-    thinking_tokens: Option<u32>,
+    effort_level: Option<String>,
     permission_mode: Option<String>,
 }
 
@@ -333,17 +365,17 @@ impl ClaudeProcessHandle {
 
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<String>();
         let (events_tx, _events_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (exit_tx, _exit_rx) = watch::channel(false);
         let init_slot: Arc<InitSlot> = Arc::new(InitSlot::default());
         let pending_controls: Arc<Mutex<HashMap<String, oneshot::Sender<ControlResponseBody>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         // Seed runtime_state with whatever was passed at spawn — claude reads
         // `--model <m>` directly so we know that value is live without ever
-        // sending set_model. Thinking tokens / permission mode have no
-        // corresponding spawn flags in our wrapper, so they stay None until
+        // sending set_model. Effort / permission mode stay None until
         // the first apply_runtime_overrides call sets them.
         let runtime_state = Arc::new(Mutex::new(RuntimeState {
             model: model.clone(),
-            thinking_tokens: None,
+            effort_level: None,
             permission_mode: None,
         }));
 
@@ -353,6 +385,7 @@ impl ClaudeProcessHandle {
             init_slot.clone(),
             events_tx.clone(),
             pending_controls.clone(),
+            exit_tx.clone(),
         ));
         let stderr_handle = tokio::spawn(stderr_task(stderr, pid));
 
@@ -370,6 +403,7 @@ impl ClaudeProcessHandle {
             pid,
             writer_tx,
             events_tx,
+            exit_tx,
             init_slot,
             pending_controls,
             runtime_state,
@@ -402,6 +436,13 @@ impl ClaudeProcessHandle {
     /// kept on the bridge side, not replayed by the pool.
     pub fn subscribe_events(&self) -> broadcast::Receiver<ClaudeEvent> {
         self.events_tx.subscribe()
+    }
+
+    /// Subscribe to the child-process terminal signal. `watch` preserves the
+    /// latest value, so a driver created just after an early process exit still
+    /// observes it immediately.
+    pub fn subscribe_exit(&self) -> watch::Receiver<bool> {
+        self.exit_tx.subscribe()
     }
 
     /// Wait until claude has emitted its `system/init` line, returning a
@@ -472,7 +513,7 @@ impl ClaudeProcessHandle {
     ///   envelope could be written.
     ///
     /// Used by `turn/interrupt`, `thread/rollback`, and the runtime config
-    /// setters (`set_model`, `set_permission_mode`, `set_max_thinking_tokens`).
+    /// setters (`set_model`, `set_permission_mode`, `apply_flag_settings`).
     pub async fn request_control(
         &self,
         request: ControlRequestBody,
@@ -497,6 +538,12 @@ impl ClaudeProcessHandle {
         match timeout(deadline, rx).await {
             Ok(Ok(body)) => match body {
                 ControlResponseBody::Success { response } => {
+                    if let Some(message) = rejected_control_response(response.as_ref()) {
+                        return Err(ClaudeProcessError::ControlError {
+                            request_id,
+                            message,
+                        });
+                    }
                     Ok(ControlResponseBody::Success { response })
                 }
                 ControlResponseBody::Error { error } => Err(ClaudeProcessError::ControlError {
@@ -530,7 +577,7 @@ impl ClaudeProcessHandle {
     pub async fn apply_runtime_overrides(
         &self,
         model: Option<&str>,
-        thinking_tokens: Option<u32>,
+        effort_level: Option<&str>,
         permission_mode: Option<&str>,
         deadline: Duration,
     ) -> Result<(), ClaudeProcessError> {
@@ -546,24 +593,36 @@ impl ClaudeProcessHandle {
                     },
                     deadline,
                 )
-                .await?;
+                .await
+                .map_err(|source| ClaudeProcessError::RuntimeOverride {
+                    field: "model",
+                    value: want.to_string(),
+                    source: Box::new(source),
+                })?;
                 let mut guard = self.runtime_state.lock().await;
                 guard.model = Some(want.to_string());
             }
         }
-        if let Some(want) = thinking_tokens {
+        if let Some(want) = effort_level {
             let need_dispatch = {
                 let guard = self.runtime_state.lock().await;
-                guard.thinking_tokens != Some(want)
+                guard.effort_level.as_deref() != Some(want)
             };
             if need_dispatch {
                 self.request_control(
-                    ControlRequestBody::SetMaxThinkingTokens { tokens: want },
+                    ControlRequestBody::ApplyFlagSettings {
+                        settings: serde_json::json!({"effortLevel": want}),
+                    },
                     deadline,
                 )
-                .await?;
+                .await
+                .map_err(|source| ClaudeProcessError::RuntimeOverride {
+                    field: "effortLevel",
+                    value: want.to_string(),
+                    source: Box::new(source),
+                })?;
                 let mut guard = self.runtime_state.lock().await;
-                guard.thinking_tokens = Some(want);
+                guard.effort_level = Some(want.to_string());
             }
         }
         if let Some(want) = permission_mode {
@@ -578,7 +637,12 @@ impl ClaudeProcessHandle {
                     },
                     deadline,
                 )
-                .await?;
+                .await
+                .map_err(|source| ClaudeProcessError::RuntimeOverride {
+                    field: "permissionMode",
+                    value: want.to_string(),
+                    source: Box::new(source),
+                })?;
                 let mut guard = self.runtime_state.lock().await;
                 guard.permission_mode = Some(want.to_string());
             }
@@ -588,11 +652,11 @@ impl ClaudeProcessHandle {
 
     /// Snapshot the runtime cache. Cheap clone of three small Options. Useful
     /// for diagnostics and tests.
-    pub async fn runtime_snapshot(&self) -> (Option<String>, Option<u32>, Option<String>) {
+    pub async fn runtime_snapshot(&self) -> (Option<String>, Option<String>, Option<String>) {
         let guard = self.runtime_state.lock().await;
         (
             guard.model.clone(),
-            guard.thinking_tokens,
+            guard.effort_level.clone(),
             guard.permission_mode.clone(),
         )
     }
@@ -600,6 +664,9 @@ impl ClaudeProcessHandle {
     /// Close stdin to signal a clean shutdown, then wait for claude to exit
     /// and reap the child. Idempotent.
     pub async fn shutdown(&self) {
+        // 先通知 driver，保证显式 interrupt/release 即使随后 abort reader，
+        // 也会把当前 turn 收敛为 Failed，而不是永久停在 InProgress。
+        let _ = self.exit_tx.send(true);
         // Aborting the writer task drops its `ChildStdin`, which closes
         // claude's stdin pipe and causes a clean exit.
         if let Some(handle) = self._tasks.writer.lock().await.take() {
@@ -646,6 +713,7 @@ async fn reader_task(
     init_slot: Arc<InitSlot>,
     events_tx: broadcast::Sender<ClaudeEvent>,
     pending_controls: Arc<Mutex<HashMap<String, oneshot::Sender<ControlResponseBody>>>>,
+    exit_tx: watch::Sender<bool>,
 ) {
     let reader = BufReader::new(stdout);
     let mut lines = reader.lines();
@@ -712,6 +780,8 @@ async fn reader_task(
     // instead of hanging on the deadline.
     let mut pending = pending_controls.lock().await;
     pending.clear();
+    drop(pending);
+    let _ = exit_tx.send(true);
 }
 
 async fn stderr_task(stderr: ChildStderr, pid: Option<u32>) {
@@ -744,6 +814,7 @@ impl ClaudeProcessHandle {
             pid: None,
             writer_tx,
             events_tx,
+            exit_tx: watch::channel(false).0,
             init_slot: Arc::new(InitSlot::default()),
             pending_controls: Arc::new(Mutex::new(HashMap::new())),
             runtime_state: Arc::new(Mutex::new(RuntimeState::default())),
@@ -801,6 +872,22 @@ mod tests {
             .await
             .expect("init");
         assert_eq!(got.session_id, "s1");
+    }
+
+    #[tokio::test]
+    async fn shutdown_notifies_process_exit_subscribers() {
+        let (writer_tx, _writer_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, _events_rx) = broadcast::channel(8);
+        let handle =
+            ClaudeProcessHandle::__test_dangling(writer_tx, events_tx, PathBuf::from("/tmp"));
+        let mut exit_rx = handle.subscribe_exit();
+
+        handle.shutdown().await;
+        exit_rx
+            .changed()
+            .await
+            .expect("exit signal sender remains live");
+        assert!(*exit_rx.borrow());
     }
 
     #[tokio::test]
@@ -888,6 +975,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepted_false_control_response_is_an_explicit_rejection() {
+        let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, _events_rx) = broadcast::channel(8);
+        let handle = Arc::new(ClaudeProcessHandle::__test_dangling(
+            writer_tx,
+            events_tx,
+            PathBuf::from("/tmp"),
+        ));
+        let pending = handle.pending_controls_handle();
+        let h2 = Arc::clone(&handle);
+        let task = tokio::spawn(async move {
+            h2.apply_runtime_overrides(Some("unknown-model"), None, None, Duration::from_secs(2))
+                .await
+        });
+        let line = writer_rx.recv().await.expect("writer line");
+        let parsed: serde_json::Value = serde_json::from_str(&line).expect("json");
+        let request_id = parsed["request_id"].as_str().unwrap().to_string();
+        pending
+            .lock()
+            .await
+            .remove(&request_id)
+            .unwrap()
+            .send(ControlResponseBody::Success {
+                response: Some(serde_json::json!({
+                    "accepted": false,
+                    "message": "not a recognized model id"
+                })),
+            })
+            .unwrap();
+
+        let err = task.await.expect("join").expect_err("rejection expected");
+        match err {
+            ClaudeProcessError::RuntimeOverride {
+                field,
+                value,
+                source,
+            } => {
+                assert_eq!(field, "model");
+                assert_eq!(value, "unknown-model");
+                assert!(matches!(
+                    source.as_ref(),
+                    ClaudeProcessError::ControlError { message, .. }
+                        if message == "not a recognized model id"
+                ));
+            }
+            other => panic!("expected model RuntimeOverride error, got {other:?}"),
+        }
+        assert_eq!(handle.runtime_snapshot().await.0, None);
+    }
+
+    #[tokio::test]
     async fn request_control_times_out_and_reclaims_slot() {
         let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<String>();
         let (events_tx, _events_rx) = broadcast::channel(8);
@@ -924,6 +1062,45 @@ mod tests {
             .await
             .expect_err("writer closed");
         assert!(matches!(err, ClaudeProcessError::WriterClosed(_)));
+    }
+
+    #[tokio::test]
+    async fn runtime_override_applies_native_effort_and_skips_duplicate() {
+        let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, _events_rx) = broadcast::channel(8);
+        let handle = Arc::new(ClaudeProcessHandle::__test_dangling(
+            writer_tx,
+            events_tx,
+            PathBuf::from("/tmp"),
+        ));
+        let pending = handle.pending_controls_handle();
+        let h2 = Arc::clone(&handle);
+        let task = tokio::spawn(async move {
+            h2.apply_runtime_overrides(None, Some("xhigh"), None, Duration::from_secs(2))
+                .await
+        });
+
+        let line = writer_rx.recv().await.expect("writer line");
+        let parsed: serde_json::Value = serde_json::from_str(&line).expect("json");
+        assert_eq!(parsed["request"]["subtype"], "apply_flag_settings");
+        assert_eq!(parsed["request"]["settings"]["effortLevel"], "xhigh");
+
+        let request_id = parsed["request_id"].as_str().unwrap().to_string();
+        let waiter = pending.lock().await.remove(&request_id).unwrap();
+        waiter
+            .send(ControlResponseBody::Success { response: None })
+            .unwrap();
+        task.await.expect("join").expect("override");
+
+        assert_eq!(
+            handle.runtime_snapshot().await,
+            (None, Some("xhigh".into()), None)
+        );
+        handle
+            .apply_runtime_overrides(None, Some("xhigh"), None, Duration::from_millis(50))
+            .await
+            .expect("duplicate is a no-op");
+        assert!(writer_rx.try_recv().is_err());
     }
 
     #[tokio::test]

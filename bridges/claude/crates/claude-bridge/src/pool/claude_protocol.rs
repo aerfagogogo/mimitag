@@ -114,8 +114,9 @@ pub enum ControlRequestBody {
     SetModel { model: String },
     /// Toggle permission mode mid-thread (e.g. `default → bypassPermissions`).
     SetPermissionMode { mode: String },
-    /// Cap the thinking budget in tokens.
-    SetMaxThinkingTokens { tokens: u32 },
+    /// Apply Claude Code runtime settings without mutating user/project files.
+    /// `effortLevel` is the native effort control used by the bridge.
+    ApplyFlagSettings { settings: Value },
     /// Cancel a single subagent task by its task id.
     StopTask { task_id: String },
     /// Roll the on-disk transcript back to the supplied user message id.
@@ -258,6 +259,11 @@ pub enum ClaudeOutbound {
     StreamlinedText(serde_json::Value),
     /// Compact tool-use summary stream. Not surfaced to codex in v1.
     StreamlinedToolUseSummary(serde_json::Value),
+    /// Claude Code 会持续增加只用于 CLI/运行时观测的顶层事件，例如
+    /// `command_lifecycle`。这些事件不应让 stdout reader 丢掉整行，更不能
+    /// 影响同一批次后续 assistant/result 的交付。
+    #[serde(other)]
+    Other,
 }
 
 // ----- control responses ---------------------------------------------------
@@ -414,7 +420,10 @@ pub struct McpServerInit {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SystemStatus {
-    pub status: String,
+    /// Claude 2.1.215+ 在部分空闲边界会发送 `status:null`。桥接层当前
+    /// 不消费这个字段，因此按可选值接收，避免协议漂移中断事件流。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -713,11 +722,32 @@ mod tests {
         }));
         match evt {
             ClaudeOutbound::System(SystemEvent::Status(s)) => {
-                assert_eq!(s.status, "requesting");
+                assert_eq!(s.status.as_deref(), Some("requesting"));
                 assert_eq!(s.uuid.as_deref(), Some("u1"));
             }
             other => panic!("expected System(Status), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn accepts_null_system_status_and_unknown_top_level_events() {
+        let status: ClaudeOutbound = parse(json!({
+            "type": "system",
+            "subtype": "status",
+            "status": null,
+            "uuid": "u-null"
+        }));
+        match status {
+            ClaudeOutbound::System(SystemEvent::Status(s)) => assert_eq!(s.status, None),
+            other => panic!("expected nullable System(Status), got {other:?}"),
+        }
+
+        let lifecycle: ClaudeOutbound = parse(json!({
+            "type": "command_lifecycle",
+            "command_id": "cmd-1",
+            "phase": "started"
+        }));
+        assert!(matches!(lifecycle, ClaudeOutbound::Other));
     }
 
     #[test]
@@ -1057,6 +1087,28 @@ mod tests {
                 "type": "control_request",
                 "request_id": "abc",
                 "request": {"subtype": "set_model", "model": "sonnet"}
+            })
+        );
+    }
+
+    #[test]
+    fn outbound_control_request_apply_flag_settings_serializes() {
+        let req = ClaudeInbound::ControlRequest(ControlRequestEnvelope {
+            request_id: "abc".into(),
+            request: ControlRequestBody::ApplyFlagSettings {
+                settings: json!({"effortLevel": "xhigh"}),
+            },
+        });
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(
+            serialized,
+            json!({
+                "type": "control_request",
+                "request_id": "abc",
+                "request": {
+                    "subtype": "apply_flag_settings",
+                    "settings": {"effortLevel": "xhigh"}
+                }
             })
         );
     }

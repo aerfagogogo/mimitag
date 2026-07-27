@@ -67,11 +67,11 @@ struct ConversationActivityBatchRow: View, Equatable {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
             statusMarker
 
             Text(summaryText)
-                .font(themeStore.uiFont(.caption, weight: .medium))
+                .font(themeStore.uiFont(size: 14, weight: .medium))
                 .foregroundStyle(headerTint)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -93,7 +93,7 @@ struct ConversationActivityBatchRow: View, Equatable {
         case .running:
             ProgressView()
                 .controlSize(.mini)
-                .tint(tokens.secondaryText)
+                .tint(tokens.accent)
                 .frame(width: 14, height: 18)
         case .completed:
             Image(systemName: "circle.fill")
@@ -194,7 +194,7 @@ struct ConversationActivityRow: View, Equatable {
 
             if isReasoning {
                 Text(reasoningText)
-                    .font(themeStore.uiFont(.caption))
+                    .font(themeStore.uiFont(size: 14))
                     .italic()
                     .foregroundStyle(tokens.secondaryText)
                     .lineLimit(isExpanded ? nil : 3)
@@ -203,13 +203,13 @@ struct ConversationActivityRow: View, Equatable {
             } else {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(activityTitle)
-                        .font(themeStore.uiFont(.caption, weight: .medium))
+                        .font(themeStore.uiFont(size: 14, weight: .medium))
                         .foregroundStyle(activityTint)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let detail = activityDetail {
                         Text(detail)
-                            .font(themeStore.uiFont(.caption2))
+                            .font(themeStore.uiFont(size: 12))
                             .foregroundStyle(tokens.secondaryText.opacity(0.84))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -402,6 +402,10 @@ struct ConversationActivityRow: View, Equatable {
     private var activityTint: Color {
         if isFailure {
             return .red
+        }
+        if isRunning {
+            // 运行中的转圈统一使用主题紫；完成态继续保持中性，避免整页到处发亮。
+            return tokens.accent
         }
         if isApprovedInteraction || (message.kind == .userInput && !isSkippedInteraction) {
             return tokens.success

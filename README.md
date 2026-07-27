@@ -32,7 +32,7 @@
   <img src="artifacts/social-preview/mimi-remote-social-preview-v3.png" alt="Mimi Remote continuing a Codex session across a real iPad and iPhone interface" width="100%" />
 </p>
 
-Mimi Remote connects to your Mac through Tailscale and keeps source code, agent credentials, and full sessions on your own devices. Codex is the primary supported runtime; an optional Claude Code bridge is available as an experimental channel.
+Mimi Remote connects to your Mac through Tailscale or the same local network and keeps source code, agent credentials, and full sessions on your own devices. Codex is the primary supported runtime; an optional Claude Code bridge is available as an experimental channel.
 
 Mimi Remote is an independent third-party project. It is not affiliated with, endorsed by, or a product of OpenAI, Anthropic, or Tailscale.
 
@@ -97,11 +97,11 @@ Codex is the primary supported runtime. Claude Code is available only through th
 
 ```mermaid
 flowchart TD
-    A["Mimi Remote\niPhone / iPad"] -->|"Tailscale · Bearer token\nREST + WebSocket"| B["agentd\nGo control plane / safety gateway"]
+    A["Mimi Remote\niPhone / iPad"] -->|"Tailscale / local network · Bearer token\nREST + WebSocket"| B["agentd\nGo control plane / safety gateway"]
     B -->|"allowlist · cwd scope\nJSON-RPC policy"| C["Codex app-server"]
     C --> D["Codex CLI credentials\nand local projects"]
-    B -->|"runtime=claude\none process per connection"| E["alleycat-claude-bridge"]
-    E -->|"stdio JSONL"| F["Claude Code headless"]
+    B -->|"runtime=claude\nstable session + cursor"| E["resident alleycat-claude-bridge"]
+    E -->|"one stdio JSONL process per thread"| F["Claude Code headless"]
 ```
 
 The iOS app stores only the outer `agentd` token in Keychain. The loopback app-server capability token stays on the Mac. `agentd` limits access to configured projects, `browse_roots`, and managed Worktrees; remote commands are limited to configured actions with confirmation, timeout, and output limits.
@@ -112,10 +112,12 @@ The iOS app stores only the outer `agentd` token in Keychain. The loopback app-s
 
 Requirements:
 
-- A Mac with Codex CLI installed and signed in.
-- The Mac and iPhone/iPad joined to the same Tailscale network.
-- Homebrew on macOS.
-- Xcode 26 or later, including an iOS 26 SDK.
+- A Mac running macOS 26 or later, with Codex CLI installed and signed in.
+- The Mac and iPhone/iPad connected to the same private network. Tailscale is recommended for access across different networks but is optional for same-LAN use.
+
+For the normal setup path, download [`Mimi-Remote-Mac.dmg`](https://github.com/gaixianggeng/mimi-remote/releases/latest/download/Mimi-Remote-Mac.dmg) and its SHA-256 file, verify the checksum, open the DMG, drag **Mimi Remote Mac** to Applications, then finish first-run setup from the menu bar. The app includes `agentd` and the compatible Claude bridge; Homebrew, Go, Rust, and Xcode are not required for the Mac host.
+
+For command-line installation, server use, or recovery:
 
 ```bash
 brew update
@@ -126,7 +128,7 @@ codex app-server --help
 agentd up
 ```
 
-`agentd up` creates private local configuration and separate tokens, starts the service, waits for the app-server WebSocket, and prints a short-lived pairing QR code.
+`agentd up` creates private local configuration and separate tokens, starts the service, waits for the app-server WebSocket, and prints a short-lived pairing QR code. It prefers Tailscale when available; otherwise it enables same-LAN access and publishes the current private LAN address.
 
 Useful commands:
 
@@ -145,6 +147,14 @@ On macOS, `agentd restart` uses one atomic launchd kickstart, so it is safe to t
 From an agent, automation, or retained remote log, use `agentd up --no-pair` / `agentd restart --no-pair` so the output contains no pairing QR code, endpoint, or long-lived access token. `agentd up --no-pair --json` returns only the version, readiness state, and safe warnings rather than the complete setup result. When pairing is needed, have the user run `agentd pair --qr-only` in a local terminal.
 
 For Linux installation and recovery steps, see [Install, upgrade, and rollback (Chinese)](docs/install-upgrade-rollback.md).
+
+To let Codex perform the same install, upgrade, diagnosis, and rollback workflow with the repository's safety constraints, install the standalone Skill from:
+
+```text
+https://github.com/gaixianggeng/mimi-remote/tree/main/packaging/skill/install-mimi-remote
+```
+
+Ask `$skill-installer` to install that GitHub path. Each GitHub Release also includes `install-mimi-remote.zip` and its SHA-256 file for an auditable, versioned copy.
 
 ### 2. Build the iOS app from source
 
@@ -202,9 +212,9 @@ macOS does not provide one background-requestable permission for the entire user
 
 ## Claude Code bridge (experimental)
 
-The Claude bridge is disabled by default. It runs one `alleycat-claude-bridge` child process for each Claude WebSocket connection and translates the iOS app-server JSON-RPC surface to Claude Code headless JSONL.
+The Claude runtime is disabled by default. When enabled, `agentd` supervises one resident `alleycat-claude-bridge` and attaches mobile WebSocket sessions to it by a stable session key. Each Claude thread owns a headless stdio JSONL process; reconnects replay missed events or reload authoritative history instead of resubmitting `turn/start`.
 
-Install the bridge from this repository:
+The Mac DMG already includes a signed, compatible bridge next to `agentd`; do not install a second copy with Cargo for that setup. Install the bridge from source only for Homebrew, Linux, or standalone development:
 
 ```bash
 cargo install --git https://github.com/gaixianggeng/codex-ipad-agent.git \
@@ -219,7 +229,7 @@ Enable it explicitly in the user configuration:
 {
   "claude": {
     "enabled": true,
-    "bridge_bin": "/opt/homebrew/bin/alleycat-claude-bridge",
+    "bridge_bin": "",
     "args": [],
     "max_concurrent_bridges": 3,
     "env": { "TERM": "xterm-256color" }
@@ -227,7 +237,11 @@ Enable it explicitly in the user configuration:
 }
 ```
 
-This is an experimental channel: a network interruption, device lock, or WebSocket close terminates the bridge and can interrupt the current turn. Goal, archive, and fork are not available for Claude sessions. Read the [Claude bridge architecture (Chinese)](docs/claude-bridge-architecture.md) before enabling it.
+An empty `bridge_bin` selects the bridge bundled with Mimi Remote Mac. Homebrew and Linux installations must instead set the absolute path returned by `command -v alleycat-claude-bridge`. The configuration file contains long-lived credentials: back it up privately, update only the `claude` fields with a JSON-aware tool, preserve mode `0600`, and never print the complete file into logs or chats.
+
+After changing the configuration, restart from the current service owner: use **Restart Service** in the Mimi Remote Mac menu, `agentd restart --no-pair` for Homebrew, or the user-systemd service on Linux. Run Doctor and confirm that the mobile runtime picker exposes Claude without disrupting Codex.
+
+This remains an experimental channel. Goal, archive, and fork are not available for Claude sessions; there is no APNs background push or cloud synchronization. A bounded replay ring covers normal disconnects, while bridge/Mac restarts fall back to local Claude history and can still lose a very small unflushed window. Read the [Claude bridge architecture (Chinese)](docs/claude-bridge-architecture.md) before enabling it.
 
 ## Local agent team with OpenTag (optional)
 
@@ -254,7 +268,7 @@ Start and configure your own [OpenTag](https://github.com/fancyboi999/open-tag) 
 - Mimi Remote is not a general-purpose SSH terminal and does not run Codex inside the iOS sandbox.
 - It has no cloud account, code-hosting proxy, public relay, arbitrary remote shell, unattended deletion, or multi-user sharing.
 - One iOS WebSocket can attach to a session at a time. Cloud/projectless threads, background push, offline remote notifications, profile sync, and IDE sync are not implemented.
-- The recommended endpoint is a private Tailscale address. Do not expose `agentd` directly to the public Internet.
+- A private Tailscale address is recommended across networks. Without Tailscale, Mimi Remote can use a private LAN address only while both devices are on the same local network. Do not expose `agentd` directly to the public Internet.
 - Claude Code support depends on external CLI and bridge behavior, has a smaller feature surface, and must not be treated as the default runtime.
 
 For the complete, code-oriented capability matrix and risk list, see [project status (Chinese)](docs/project-status.md).
@@ -263,7 +277,7 @@ For the complete, code-oriented capability matrix and risk list, see [project st
 
 Mimi Remote has no ads, analytics SDK, or maintainer-operated telemetry service. Project content, conversations, logs, code, and Codex/Claude credentials remain on your devices unless you explicitly use a third-party service such as Codex, Claude Code, OpenTag, GitHub, Codex voice transcription, or MCP. Apple voice input uses on-device SpeechAnalyzer processing.
 
-The app rejects public HTTP endpoints at the application layer and is designed for Tailscale/private-network use. Do not put real tokens, Tailnet IPs, private paths, logs, or project content in public issues, pull requests, or screenshots. Report vulnerabilities privately using [SECURITY.md](SECURITY.md). See the bilingual [privacy policy](docs/privacy-policy.md), [terms of use](docs/terms-of-use.md), and [support page](docs/support.md).
+The app rejects public HTTP endpoints at the application layer and is designed for Tailscale or same-LAN private-network use. Do not put real tokens, Tailnet IPs, private paths, logs, or project content in public issues, pull requests, or screenshots. Report vulnerabilities privately using [SECURITY.md](SECURITY.md). See the bilingual [privacy policy](docs/privacy-policy.md), [terms of use](docs/terms-of-use.md), and [support page](docs/support.md).
 
 ## Development checks
 

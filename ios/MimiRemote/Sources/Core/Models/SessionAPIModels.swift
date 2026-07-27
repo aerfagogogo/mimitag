@@ -502,6 +502,8 @@ enum CodexAppServerReasoningEffort: String, Codable, CaseIterable, Hashable, Ide
     case medium
     case high
     case xhigh
+    case max
+    case ultra
 
     var id: String { rawValue }
 }
@@ -561,6 +563,11 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
         case `default`
     }
 
+    enum ModelSelectionPolicy: String, Codable, Hashable {
+        case catalogOnly
+        case allowUnlisted
+    }
+
     var runtimeProvider: String?
     var model: String?
     var modelProvider: String?
@@ -582,6 +589,8 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
     // 只在 iPad 发起 turn/start 时消费的本地发送配置；不模拟 prompt，不影响 thread/start。
     var collaborationMode: CollaborationMode?
     var planGuidanceEnabled: Bool
+    // 仅供本地派发前校验使用，不进入 app-server 请求；随队列持久化以保留提交时的权限边界。
+    var modelSelectionPolicy: ModelSelectionPolicy
 
     enum CodingKeys: String, CodingKey {
         case runtimeProvider = "runtime_provider"
@@ -604,6 +613,7 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
         case threadSource = "thread_source"
         case collaborationMode = "collaboration_mode"
         case planGuidanceEnabled = "plan_guidance_enabled"
+        case modelSelectionPolicy = "model_selection_policy"
     }
 
     init(
@@ -626,7 +636,8 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
         sessionStartSource: String? = nil,
         threadSource: String? = nil,
         collaborationMode: CollaborationMode? = .default,
-        planGuidanceEnabled: Bool = false
+        planGuidanceEnabled: Bool = false,
+        modelSelectionPolicy: ModelSelectionPolicy = .catalogOnly
     ) {
         self.runtimeProvider = runtimeProvider?.trimmingCharacters(in: .whitespacesAndNewlines).appServerNilIfEmpty
         self.model = model
@@ -648,6 +659,7 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
         self.threadSource = threadSource
         self.collaborationMode = collaborationMode
         self.planGuidanceEnabled = planGuidanceEnabled
+        self.modelSelectionPolicy = modelSelectionPolicy
     }
 
     init(from decoder: Decoder) throws {
@@ -672,7 +684,8 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
             sessionStartSource: try container.decodeIfPresent(String.self, forKey: .sessionStartSource),
             threadSource: try container.decodeIfPresent(String.self, forKey: .threadSource),
             collaborationMode: try container.decodeIfPresent(CollaborationMode.self, forKey: .collaborationMode) ?? .default,
-            planGuidanceEnabled: try container.decodeIfPresent(Bool.self, forKey: .planGuidanceEnabled) ?? false
+            planGuidanceEnabled: try container.decodeIfPresent(Bool.self, forKey: .planGuidanceEnabled) ?? false,
+            modelSelectionPolicy: try container.decodeIfPresent(ModelSelectionPolicy.self, forKey: .modelSelectionPolicy) ?? .catalogOnly
         )
     }
 
@@ -696,7 +709,8 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
         sessionStartSource: nil,
         threadSource: nil,
         collaborationMode: .default,
-        planGuidanceEnabled: false
+        planGuidanceEnabled: false,
+        modelSelectionPolicy: .catalogOnly
     )
 
     func sanitizedForStandardComposer() -> CodexAppServerTurnOptions {
@@ -715,6 +729,7 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
         sanitized.threadSource = nil
         sanitized.collaborationMode = .default
         sanitized.planGuidanceEnabled = false
+        sanitized.modelSelectionPolicy = .catalogOnly
         return sanitized
     }
 
@@ -839,7 +854,8 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
 
     private func collaborationModePayload(mode: CollaborationMode) -> CodexAppServerJSONValue {
         // Plan/default 都带 settings：Plan 用于启用规划协作，default 用于明确退出规划协作。
-        // developer_instructions 固定 null，表示使用 Codex 内置指令，避免移动端透传危险自定义指令。
+        // 移动端固定发送 null，避免透传危险自定义指令；可信 gateway 会为 default
+        // 注入固定的退出 Plan 指令，规避部分 app-server 版本不展开 null 的问题。
         var settings: [String: CodexAppServerJSONValue] = [
             "reasoning_effort": reasoningEffort.map { .string($0.rawValue) } ?? .null,
             "developer_instructions": .null
@@ -988,21 +1004,21 @@ struct CodexAppServerModelOption: Codable, Hashable, Identifiable {
             id: "gpt-5.6-sol",
             title: "GPT-5.6 Sol",
             description: "Detail and polish",
-            supportedReasoningEfforts: ["medium", "high", "xhigh"],
-            defaultReasoningEffort: "medium"
+            supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            defaultReasoningEffort: "low"
         ),
         CodexAppServerModelOption(
             id: "gpt-5.6-terra",
             title: "GPT-5.6 Terra",
             description: "Everyday workhorse",
-            supportedReasoningEfforts: ["medium", "high", "xhigh"],
+            supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
             defaultReasoningEffort: "medium"
         ),
         CodexAppServerModelOption(
             id: "gpt-5.6-luna",
             title: "GPT-5.6 Luna",
             description: "Clear and repeatable",
-            supportedReasoningEfforts: ["medium", "high", "xhigh"],
+            supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
             defaultReasoningEffort: "medium"
         ),
         CodexAppServerModelOption(id: "gpt-5.5", title: "GPT-5.5", isDefault: true),
@@ -1019,7 +1035,17 @@ struct CodexAppServerModelOption: Codable, Hashable, Identifiable {
             provider: "anthropic",
             runtimeProvider: "claude",
             description: "Anthropic's most capable generally available model for the hardest, longest-running agentic work.",
-            supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
+            supportedReasoningEfforts: ["medium", "high", "xhigh", "max"],
+            defaultReasoningEffort: "high"
+        ),
+        CodexAppServerModelOption(
+            id: "opus",
+            title: "Claude Opus 5",
+            provider: "anthropic",
+            runtimeProvider: "claude",
+            description: "Claude CLI alias resolved to the latest available Opus model.",
+            isDefault: true,
+            supportedReasoningEfforts: ["medium", "high", "xhigh", "max"],
             defaultReasoningEffort: "high"
         ),
         CodexAppServerModelOption(
@@ -1028,14 +1054,8 @@ struct CodexAppServerModelOption: Codable, Hashable, Identifiable {
             provider: "anthropic",
             runtimeProvider: "claude",
             description: "Claude CLI alias resolved to the latest available Sonnet model.",
-            isDefault: true
-        ),
-        CodexAppServerModelOption(
-            id: "opus",
-            title: "Claude Opus 4.8",
-            provider: "anthropic",
-            runtimeProvider: "claude",
-            description: "Claude CLI alias resolved to the latest available Opus model."
+            supportedReasoningEfforts: ["medium", "high", "xhigh", "max"],
+            defaultReasoningEffort: "high"
         ),
         CodexAppServerModelOption(
             id: "haiku",
@@ -1057,12 +1077,9 @@ struct CodexAppServerModelOption: Codable, Hashable, Identifiable {
             seen.insert(option.id)
             options.append(option)
         }
-        return options.sorted { lhs, rhs in
-            if lhs.isDefault != rhs.isDefault {
-                return lhs.isDefault
-            }
-            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-        }
+        // 数组顺序由各运行时的 model/list 定义，代表其推荐/新旧顺序；
+        // 展示层会直接截取前三项，因此这里不能再按默认项或标题二次排序。
+        return options
     }
 
     private static func modelItems(from result: CodexAppServerJSONValue?) -> [CodexAppServerJSONValue] {
@@ -1080,7 +1097,7 @@ struct CodexAppServerModelOption: Codable, Hashable, Identifiable {
                 return items
             }
             if let keyed = object[key]?.objectValue {
-                return keyed.map { key, value in
+                return keyed.sorted(by: { $0.key < $1.key }).map { key, value in
                     if var object = value.objectValue {
                         object["id"] = object["id"] ?? .string(key)
                         return .object(object)
@@ -1089,7 +1106,7 @@ struct CodexAppServerModelOption: Codable, Hashable, Identifiable {
                 }
             }
         }
-        return object.map { key, value in
+        return object.sorted(by: { $0.key < $1.key }).map { key, value in
             if var item = value.objectValue {
                 item["id"] = item["id"] ?? .string(key)
                 return .object(item)

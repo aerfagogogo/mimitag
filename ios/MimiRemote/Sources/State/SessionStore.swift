@@ -48,6 +48,8 @@ final class SessionStore: ObservableObject {
     @Published var sessionRemindersByID: [SessionID: SessionReminder] = [:]
     @Published var selectedProjectID: String?
     @Published var selectedSessionID: String?
+    /// 路由只监听明确的导航提交，不再把后台数据更新等同于“打开会话”。
+    @Published var lastSelectionCommit: SessionSelectionCommit?
     @Published var sessionSearchQuery = "" {
         didSet {
             guard oldValue != sessionSearchQuery else {
@@ -90,6 +92,9 @@ final class SessionStore: ObservableObject {
     @Published var worktreeErrorMessage: String?
     @Published var gitStatusByPath: [String: GitStatusResponse] = [:]
     @Published var gitStatusErrorByPath: [String: String] = [:]
+    @Published var workspaceGitSummaryByPath: [String: GitStatusResponse] = [:]
+    @Published var workspaceGitSummaryUpdatedAtByPath: [String: Date] = [:]
+    @Published var refreshingWorkspaceGitSummaryPaths: Set<String> = []
     @Published var isRefreshingGitStatus = false
     @Published var gitActionErrorByPath: [String: String] = [:]
     @Published var commandActionsByPath: [String: [AgentCommandAction]] = [:]
@@ -143,6 +148,9 @@ final class SessionStore: ObservableObject {
     // Goal / Plan 选择同样需要跨横竖屏 View 重建，但不应持久化到下次启动。
     // 保持非 @Published，ComposerView 自己维持当前可见状态，避免放大刷新范围。
     var composerSendModeCache = ComposerSendModeCache()
+    // 补充信息可能包含 isSecret 答案，只在 SessionStore 生命周期内暂存，绝不落盘。
+    // 这样既能跨横竖屏导致的 ComposerView 重建恢复，又不会扩大敏感数据存储范围。
+    var pendingUserInputFormStateCache = PendingUserInputFormState()
     let clientFactory: () throws -> any SessionStoreAPIClient
     let webSocketFactory: () -> any SessionWebSocketClient
     let sessionWebSocketFactory: ((AgentSession) -> any SessionWebSocketClient)?
@@ -155,11 +163,16 @@ final class SessionStore: ObservableObject {
     let sessionSearchSleep: (UInt64) async throws -> Void
     var webSocket: (any SessionWebSocketClient)?
     var connectedSessionID: String?
+    var selectionGeneration: UInt64 = 0
     var webSocketConnectionGeneration = 0
     var webSocketReconnectTask: Task<Void, Never>?
     var webSocketReconnectAttemptBySessionID: [SessionID: Int] = [:]
     var lastAppliedNetworkPathSequence: UInt64 = 0
     var networkPathGeneration = 0
+    /// 前台/网络恢复各自推进一次代次；同一代次对当前会话只做一次强制历史对账。
+    var recoveryHistoryGeneration: UInt64 = 0
+    var reconciledRecoveryGenerationBySessionID: [SessionID: UInt64] = [:]
+    var recoveryHistorySucceededBySessionID: [SessionID: Bool] = [:]
     var networkSuspendedSessionID: SessionID?
     var networkRecoveryTask: Task<Void, Never>?
     var appLifecycleSuspendedSessionID: SessionID?
@@ -200,8 +213,6 @@ final class SessionStore: ObservableObject {
     var hiddenSessionCountByProjectID: [String: Int] = [:]
     @Published var sessionVisibleLimitByProjectID: [String: Int] = [:]
     var sessionListSnapshotsByProjectID: [String: ProjectSessionListSnapshot] = [:]
-    var frozenAllSessionOrder: [SessionID] = []
-    var frozenSessionOrderByProjectID: [String: [SessionID]] = [:]
     var sessionPageCursorByProjectID: [String: String] = [:]
     var sessionHasMoreByProjectID: [String: Bool] = [:]
     /// 工作区详情独立于侧栏展开状态记录已经加载过旧页的项目，供下拉刷新保留分页窗口。
@@ -229,6 +240,9 @@ final class SessionStore: ObservableObject {
     var historyLoadJobTokenBySessionID: [SessionID: Int] = [:]
     var historyLoadedSignatureBySessionID: [SessionID: HistoryLoadSignature] = [:]
     var historyLoadedQualityBySessionID: [SessionID: HistoryLoadQuality] = [:]
+    /// 运行中的 full 历史可能暂时携带大量过程输出。命中网关单包上限后先显示 summary，
+    /// 等对应 Turn 完成再补拉 canonical full，避免把临时膨胀误判成永久大历史。
+    var deferredFullHistorySessionIDs: Set<SessionID> = []
     var freshEmptyHistorySignatureBySessionID: [SessionID: HistoryLoadSignature] = [:]
     var initialHistoryLoadingSessionIDs: Set<SessionID> = []
     @Published var historyLoadProgressBySessionID: [SessionID: HistoryLoadProgress] = [:]
@@ -261,6 +275,8 @@ final class SessionStore: ObservableObject {
     static let maximumUnverifiedRunningSessionMisses = 3
     static let commandActionHistoryLimit = 10
     static let queuedTurnLimitPerSession = 20
+    static let workspaceGitSummaryTTL: TimeInterval = 60
+    static let workspaceGitSummaryConcurrencyLimit = 3
 
     init(
         appStore: AppStore,

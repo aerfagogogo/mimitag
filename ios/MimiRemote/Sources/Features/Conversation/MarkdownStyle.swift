@@ -26,55 +26,53 @@ struct MarkdownStyle: Equatable {
         let fallbackAccent = colorScheme == .dark
             ? Color(red: 0.77, green: 0.56, blue: 0.84)
             : Color(red: 0.38, green: 0.12, blue: 0.41)
-        // 默认白紫主题的用户气泡是深紫底，需要单独使用浅色文字；其它主题继续走自身 token。
-        let usesDarkUserBubble = isUser && (tokens?.preset == .codex || tokens == nil)
-        let userText = Color(red: 0.97, green: 0.94, blue: 0.99)
+        let textColor = isUser
+            ? (tokens?.userBubbleForeground ?? .primary)
+            : (tokens?.primaryText ?? .primary)
         return MarkdownStyle(
             role: role,
-            textColor: usesDarkUserBubble ? userText : (tokens?.primaryText ?? .primary),
-            secondaryColor: usesDarkUserBubble ? userText.opacity(0.74) : (tokens?.secondaryText ?? .secondary),
-            linkColor: usesDarkUserBubble ? userText : (tokens?.accent ?? fallbackAccent),
-            codeForeground: usesDarkUserBubble ? userText : (tokens?.codeText ?? .primary),
-            codeBackground: usesDarkUserBubble ? Color.white.opacity(0.16) : (tokens?.codeBlock ?? Color(.tertiarySystemBackground)),
-            tableBackground: usesDarkUserBubble ? Color.white.opacity(0.16) : (tokens?.elevatedSurface ?? Color(.secondarySystemBackground)),
-            planCardBackground: usesDarkUserBubble ? Color.white.opacity(0.16) : (tokens?.planCardBackground ?? tokens?.elevatedSurface ?? Color(.secondarySystemBackground)),
-            planCardBorder: usesDarkUserBubble ? Color.white.opacity(0.24) : (tokens?.planCardBorder ?? tokens?.border ?? Color(.separator)),
-            quoteBar: usesDarkUserBubble
-                ? Color.white.opacity(0.56)
-                : (tokens?.accent.opacity(colorScheme == .dark ? 0.76 : 0.64)
-                    ?? fallbackAccent.opacity(colorScheme == .dark ? 0.76 : 0.64)),
-            dividerColor: tokens?.border ?? (usesDarkUserBubble ? Color.white.opacity(0.24) : Color(.separator)),
-            // 对话气泡里的 Markdown 按“阅读辅助”处理，字号比文档页面克制，避免回复显得笨重。
-            blockSpacing: 7,
-            textLineSpacing: 2,
+            textColor: textColor,
+            secondaryColor: isUser ? textColor.opacity(0.68) : (tokens?.secondaryText ?? .secondary),
+            linkColor: tokens?.accent ?? fallbackAccent,
+            codeForeground: tokens?.codeText ?? .primary,
+            codeBackground: tokens?.codeBlock ?? Color(.tertiarySystemBackground),
+            tableBackground: tokens?.elevatedSurface ?? Color(.secondarySystemBackground),
+            planCardBackground: tokens?.planCardBackground ?? tokens?.elevatedSurface ?? Color(.secondarySystemBackground),
+            planCardBorder: tokens?.planCardBorder ?? tokens?.border ?? Color(.separator),
+            quoteBar: tokens?.accent.opacity(colorScheme == .dark ? 0.76 : 0.64)
+                ?? fallbackAccent.opacity(colorScheme == .dark ? 0.76 : 0.64),
+            dividerColor: tokens?.border ?? Color(.separator),
+            // 回复以长文档方式阅读，字号和行距略放大；用户仍可用全局字号倍率继续调节。
+            blockSpacing: 10,
+            textLineSpacing: 4,
             fontScale: fontScale
         )
     }
 
     var bodyFont: Font {
-        .system(size: scaled(15))
+        .system(size: scaled(16))
     }
 
     var codeFont: Font {
-        .system(size: scaled(13), design: .monospaced)
+        .system(size: scaled(14), design: .monospaced)
     }
 
     var captionFont: Font {
-        .system(size: scaled(11), weight: .medium)
+        .system(size: scaled(12), weight: .medium)
     }
 
     func headingFont(level: Int) -> Font {
         switch level {
         case 1:
-            return .system(size: scaled(20), weight: .bold)
+            return .system(size: scaled(22), weight: .bold)
         case 2:
-            return .system(size: scaled(18), weight: .bold)
+            return .system(size: scaled(20), weight: .bold)
         case 3:
-            return .system(size: scaled(17), weight: .semibold)
+            return .system(size: scaled(18), weight: .semibold)
         case 4:
-            return .system(size: scaled(16), weight: .semibold)
+            return .system(size: scaled(17), weight: .semibold)
         default:
-            return .system(size: scaled(15), weight: .semibold)
+            return .system(size: scaled(16), weight: .semibold)
         }
     }
 

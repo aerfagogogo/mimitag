@@ -1,0 +1,210 @@
+import SnapshotTesting
+import SwiftUI
+import UIKit
+import XCTest
+@testable import MimiRemote
+
+@MainActor
+final class WorkspaceVisualSnapshotTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        try XCTSkipUnless(
+            UIDevice.current.userInterfaceIdiom == .pad,
+            "工作区视觉基线使用 iPad mini 画布录制。"
+        )
+    }
+
+    func testNotionStyleWorkspaceOnIPadMiniPortrait() {
+        let previousLanguage = UserDefaults.standard.string(forKey: AppLanguage.preferenceKey)
+        UserDefaults.standard.set(AppLanguage.simplifiedChinese.rawValue, forKey: AppLanguage.preferenceKey)
+        defer {
+            if let previousLanguage {
+                UserDefaults.standard.set(previousLanguage, forKey: AppLanguage.preferenceKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppLanguage.preferenceKey)
+            }
+        }
+
+        let appDefaultsSuite = "WorkspaceVisualSnapshotTests.App.\(UUID().uuidString)"
+        let appDefaults = UserDefaults(suiteName: appDefaultsSuite)!
+        appDefaults.removePersistentDomain(forName: appDefaultsSuite)
+        let appStore = AppStore(
+            defaults: appDefaults,
+            tokenStore: TokenStore(keychain: TestKeychainOperations())
+        )
+        appStore.endpoint = "http://demo-mac.local:8787"
+
+        let projects = [
+            AgentProject(
+                id: "codex-ipad-agent",
+                name: "codex-ipad-agent",
+                path: "/Users/gaixiaotongxue/code/codex-ipad-agent"
+            ),
+            AgentProject(
+                id: "design-system",
+                name: "design-system",
+                path: "/Users/gaixiaotongxue/code/design-system"
+            ),
+            AgentProject(
+                id: "app-server-lab",
+                name: "app-server-lab",
+                path: "/Users/gaixiaotongxue/code/app-server-lab"
+            )
+        ]
+        let referenceDate = Date(timeIntervalSince1970: 1_785_105_600)
+        let sessions = [
+            AgentSession(
+                id: "workspace-running",
+                projectID: projects[0].id,
+                project: projects[0].name,
+                dir: projects[0].path,
+                title: "优化 iPad mini 工作区布局",
+                status: SessionStatus.running.rawValue,
+                source: "codex",
+                runtimeProvider: "codex",
+                resumeID: "workspace-running",
+                createdAt: referenceDate.addingTimeInterval(-3_600),
+                updatedAt: referenceDate.addingTimeInterval(-90),
+                preview: "调整项目卡片、Emoji 和 Git 摘要层级。",
+                activeTurnID: "turn-workspace-running"
+            ),
+            AgentSession(
+                id: "workspace-history",
+                projectID: projects[0].id,
+                project: projects[0].name,
+                dir: projects[0].path,
+                title: "确认 Claude Code 运行时状态",
+                status: SessionStatus.completed.rawValue,
+                source: "claude",
+                runtimeProvider: "claude",
+                resumeID: "workspace-history",
+                createdAt: referenceDate.addingTimeInterval(-7_200),
+                updatedAt: referenceDate.addingTimeInterval(-3_000),
+                preview: "运行时与会话列表继续保持独立。"
+            ),
+            AgentSession(
+                id: "workspace-review",
+                projectID: projects[0].id,
+                project: projects[0].name,
+                dir: projects[0].path,
+                title: "检查轻量 Git 摘要协议",
+                status: SessionStatus.completed.rawValue,
+                source: "codex",
+                runtimeProvider: "codex",
+                resumeID: "workspace-review",
+                createdAt: referenceDate.addingTimeInterval(-10_800),
+                updatedAt: referenceDate.addingTimeInterval(-6_000),
+                preview: "卡片请求不再下载完整 diff。"
+            )
+        ]
+        let workspaces = projects.enumerated().map { index, project in
+            AgentWorkspace(
+                project: project,
+                lastOpenedAt: Date().addingTimeInterval(TimeInterval(-(index + 1) * 1_800))
+            )
+        }
+        let recentStore = makeRecentWorkspaceStore(workspaces: workspaces, endpoint: appStore.endpoint)
+        let client = MockSessionStoreClient(
+            projects: projects,
+            sessions: sessions,
+            projectSessions: [projects[0].id: sessions],
+            workspaceSessions: [projects[0].id: sessions],
+            runtimeChannelAvailability: ["claude": true]
+        )
+        let sessionStore = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            recentWorkspaceStore: recentStore,
+            clientFactory: { client }
+        )
+        sessionStore.reloadRecentWorkspaces()
+        sessionStore.sessions = sessions
+        sessionStore.workspaceGitSummaryByPath = [
+            projects[0].path: gitSummary(
+                project: projects[0],
+                branch: "main",
+                upstream: "origin/main",
+                changedFiles: 3
+            ),
+            projects[1].path: gitSummary(
+                project: projects[1],
+                branch: "release/1.0",
+                upstream: "origin/release/1.0"
+            ),
+            projects[2].path: gitSummary(
+                project: projects[2],
+                branch: "feature/gateway",
+                upstream: "origin/feature/gateway",
+                behind: 2
+            )
+        ]
+
+        let appearanceDefaultsSuite = "WorkspaceVisualSnapshotTests.Appearance.\(UUID().uuidString)"
+        let appearanceDefaults = UserDefaults(suiteName: appearanceDefaultsSuite)!
+        appearanceDefaults.removePersistentDomain(forName: appearanceDefaultsSuite)
+        let appearanceStore = WorkspaceAppearanceStore(defaults: appearanceDefaults)
+
+        let themeDefaultsSuite = "WorkspaceVisualSnapshotTests.Theme.\(UUID().uuidString)"
+        let themeDefaults = UserDefaults(suiteName: themeDefaultsSuite)!
+        themeDefaults.removePersistentDomain(forName: themeDefaultsSuite)
+        let themeStore = ThemeStore(defaults: themeDefaults)
+
+        let view = WorkspaceRootView(
+            onStartSession: { _, _ in },
+            onOpenSession: { _ in },
+            appearanceStore: appearanceStore,
+            initialWorkspaceID: projects[0].id
+        )
+        .environmentObject(appStore)
+        .environmentObject(sessionStore)
+        .environmentObject(themeStore)
+        .environment(\.colorScheme, .light)
+        .frame(width: 744, height: 1_133)
+
+        assertSnapshot(
+            of: view,
+            as: .wait(
+                for: 0.8,
+                on: .image(
+                    drawHierarchyInKeyWindow: true,
+                    precision: 0.98,
+                    layout: .fixed(width: 744, height: 1_133)
+                )
+            )
+        )
+    }
+
+    private func gitSummary(
+        project: AgentProject,
+        branch: String,
+        upstream: String,
+        changedFiles: Int = 0,
+        behind: Int = 0
+    ) -> GitStatusResponse {
+        GitStatusResponse(
+            path: project.path,
+            isRepository: true,
+            branch: branch,
+            head: "abc123",
+            ahead: 0,
+            behind: behind,
+            upstream: upstream,
+            statusText: nil,
+            diffStat: nil,
+            unstagedDiff: nil,
+            stagedDiff: nil,
+            files: (0..<changedFiles).map { index in
+                GitFileStatus(
+                    path: "Sources/File\(index + 1).swift",
+                    code: " M",
+                    staged: false,
+                    unstaged: true,
+                    untracked: false
+                )
+            },
+            truncated: false,
+            truncatedNote: nil
+        )
+    }
+}

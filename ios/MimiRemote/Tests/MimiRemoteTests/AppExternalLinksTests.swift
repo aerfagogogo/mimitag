@@ -5,6 +5,8 @@ final class AppExternalLinksTests: XCTestCase {
     func testPublicLinksUseHTTPSAndExpectedRepository() {
         let links = [
             AppExternalLinks.marketing,
+            AppExternalLinks.macRelease,
+            AppExternalLinks.macInstaller,
             AppExternalLinks.privacyPolicy,
             AppExternalLinks.termsOfUse,
             AppExternalLinks.support
@@ -23,6 +25,11 @@ final class AppExternalLinksTests: XCTestCase {
         XCTAssertTrue(AppExternalLinks.privacyPolicy.path.hasSuffix("/docs/privacy-policy.md"))
         XCTAssertTrue(AppExternalLinks.termsOfUse.path.hasSuffix("/docs/terms-of-use.md"))
         XCTAssertTrue(AppExternalLinks.support.path.hasSuffix("/docs/support.md"))
+    }
+
+    func testMacInstallerLinksRemainVersionIndependent() {
+        XCTAssertEqual(AppExternalLinks.macRelease.path, "/gaixianggeng/mimi-remote/releases/latest")
+        XCTAssertTrue(AppExternalLinks.macInstaller.path.hasSuffix("/releases/latest/download/Mimi-Remote-Mac.dmg"))
     }
 
     func testLegalDocumentsAreBundledForOfflineAccess() {

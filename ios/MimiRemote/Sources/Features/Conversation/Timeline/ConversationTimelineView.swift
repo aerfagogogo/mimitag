@@ -19,6 +19,8 @@ struct ConversationTimelineView: View {
     @State private var isPreservingHistoryScroll = false
     @State private var expandedActivityIDs: Set<String> = []
     @State private var expandedActivityGroupIDs: Set<String> = []
+    // nil 表示跟随状态默认值；显式 true/false 都是用户 override，状态切换时优先保留。
+    @State private var workGroupExpansionOverrides: [String: Bool] = [:]
     @State private var timelineItemCache = ConversationTimelineItemCache()
     // 滚动任务 bookkeeping 不属于界面状态，放在引用对象中避免每次取消/重排任务都触发 body 失效。
     @State private var tailScrollCoordinator = ConversationTailScrollCoordinator()
@@ -43,7 +45,7 @@ struct ConversationTimelineView: View {
         let activeUserDeliveryMessageID = Self.activeUserDeliveryMessageID(in: messages)
         let isHistoryLoading = sessionStore.historyLoadProgress(sessionID: sessionStore.selectedSessionID) != nil
         return ScrollViewReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .bottom) {
                 // 用 List 替代 ScrollView + LazyVStack：行高是真实测量值、
                 // 有 cell 复用，scrollTo 对尚未实例化的行也可靠。这样既消除首屏/切换会话
                 // “空白要手滑一下”的竞态，右侧滚动条也不再因 LazyVStack 高度估算而长度/位置乱跳。
@@ -135,25 +137,14 @@ struct ConversationTimelineView: View {
                 }
 
                 if shouldShowReturnToTailButton(timelineItems: timelineItems) {
-                    Button {
+                    ConversationReturnToTailButton(
+                        tokens: tokens,
+                        accessibilityLabel: returnToTailAccessibilityLabel
+                    ) {
                         returnToTimelineTail(timelineItems: timelineItems, proxy: proxy)
-                    } label: {
-                        returnToTailLabel
                     }
-                    // 固定尺寸的纯图标浮层不会因“新消息/回到底部”文案切换而跳宽，
-                    // 44pt 点击区也能让它稳定贴在时间线右下角。
-                    .buttonStyle(.plain)
-                    .frame(width: 44, height: 44)
-                    .background(tokens.primaryAction, in: Circle())
-                    .overlay {
-                        Circle()
-                            .stroke(Color.white.opacity(0.20), lineWidth: 1)
-                    }
-                    .contentShape(Circle())
-                    .shadow(color: Color.black.opacity(0.16), radius: 6, y: 3)
-                    .padding(.trailing, max(layout.horizontalInset, 16))
+                    // 放在输入区正上方的视觉中轴，不与用户气泡或右侧滚动条争抢空间。
                     .padding(.bottom, 16)
-                    .accessibilityLabel(returnToTailAccessibilityLabel)
                 }
             }
             .onChange(of: sessionStore.selectedSessionID) { oldID, newID in
@@ -172,6 +163,7 @@ struct ConversationTimelineView: View {
                 isUserScrollingTimeline = false
                 expandedActivityIDs.removeAll()
                 expandedActivityGroupIDs.removeAll()
+                workGroupExpansionOverrides.removeAll()
                 timelineItemCache.removeAll()
                 cancelPendingTailScrollAttempts()
                 if newID != nil {
@@ -366,6 +358,116 @@ struct ConversationTimelineView: View {
                 }
             )
             .equatable()
+        case .workGroup(let group):
+            let isExpanded = workGroupExpansionOverrides[group.id] ?? group.defaultIsExpanded
+            ConversationWorkGroupRow(
+                group: group,
+                layout: layout,
+                isExpanded: isExpanded,
+                toggleGroup: {
+                    toggleWorkGroup(
+                        group: group,
+                        isCurrentlyExpanded: isExpanded,
+                        proxy: proxy
+                    )
+                }
+            ) {
+                ForEach(group.entries) { entry in
+                    workGroupEntryRow(
+                        entry,
+                        activeUserDeliveryMessageID: activeUserDeliveryMessageID,
+                        outerGroupID: group.id,
+                        proxy: proxy
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workGroupEntryRow(
+        _ entry: ConversationWorkGroupEntry,
+        activeUserDeliveryMessageID: UUID?,
+        outerGroupID: String,
+        proxy: ScrollViewProxy
+    ) -> some View {
+        switch entry {
+        case .commentary(let message):
+            MessageRow(
+                message: message,
+                themeVersion: themeStore.themeVersion,
+                layout: layout,
+                showsActiveDeliveryStatus: message.id == activeUserDeliveryMessageID,
+                skills: sessionStore.capabilityList?.skills ?? [],
+                retry: { message in
+                    Task { await sessionStore.retryFailedUserMessage(message) }
+                },
+                stop: {
+                    sessionStore.sendCtrlC()
+                },
+                previewFile: { path in
+                    try await sessionStore.previewFile(path: path)
+                }
+            )
+            .equatable()
+        case .activity(let message):
+            ConversationActivityRow(
+                message: message,
+                layout: layout,
+                isExpanded: expandedActivityIDs.contains(entry.id),
+                toggle: {
+                    toggleActivityDetails(
+                        itemID: entry.id,
+                        scrollAnchorID: outerGroupID,
+                        proxy: proxy
+                    )
+                }
+            )
+            .equatable()
+        case .activityBatch(let group):
+            ConversationActivityBatchRow(
+                group: group,
+                layout: layout,
+                isExpanded: expandedActivityGroupIDs.contains(group.id),
+                expandedActivityIDs: expandedActivityIDs,
+                toggleGroup: {
+                    toggleActivityGroup(
+                        groupID: group.id,
+                        scrollAnchorID: outerGroupID,
+                        proxy: proxy
+                    )
+                },
+                toggleActivity: { message in
+                    toggleActivityDetails(
+                        itemID: ConversationTimelineItem.activityID(for: message),
+                        scrollAnchorID: outerGroupID,
+                        proxy: proxy
+                    )
+                }
+            )
+            .equatable()
+        case .processGroup(let group):
+            ConversationProcessGroupRow(
+                group: group,
+                layout: layout,
+                isExpanded: expandedActivityGroupIDs.contains(group.id),
+                expandedActivityIDs: expandedActivityIDs,
+                toggleGroup: {
+                    toggleActivityGroup(
+                        groupID: group.id,
+                        scrollAnchorID: outerGroupID,
+                        proxy: proxy
+                    )
+                },
+                toggleActivity: { message in
+                    toggleActivityDetails(
+                        itemID: ConversationTimelineItem.activityID(for: message),
+                        scrollAnchorID: outerGroupID,
+                        proxy: proxy
+                    )
+                }
+            )
+            .equatable()
         }
     }
 
@@ -396,7 +498,11 @@ struct ConversationTimelineView: View {
         }
     }
 
-    private func toggleActivityGroup(groupID: String, proxy: ScrollViewProxy) {
+    private func toggleActivityGroup(
+        groupID: String,
+        scrollAnchorID: String? = nil,
+        proxy: ScrollViewProxy
+    ) {
         let isExpanding = !expandedActivityGroupIDs.contains(groupID)
         let updateExpansion = {
             if isExpanding {
@@ -424,7 +530,40 @@ struct ConversationTimelineView: View {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                proxy.scrollTo(groupID, anchor: .bottom)
+                proxy.scrollTo(scrollAnchorID ?? groupID, anchor: .bottom)
+            }
+        }
+    }
+
+    private func toggleWorkGroup(
+        group: ConversationWorkGroup,
+        isCurrentlyExpanded: Bool,
+        proxy: ScrollViewProxy
+    ) {
+        let isExpanding = !isCurrentlyExpanded
+        let updateExpansion = {
+            // 不删除等于默认值的 override：用户选择必须在 running→terminal 后继续优先。
+            workGroupExpansionOverrides[group.id] = isExpanding
+        }
+        if accessibilityReduceMotion {
+            updateExpansion()
+        } else {
+            withAnimation(.spring(response: 0.32, dampingFraction: 1)) {
+                updateExpansion()
+            }
+        }
+        guard isExpanding, isTimelineNearBottom else {
+            return
+        }
+        Task { @MainActor in
+            await Task.yield()
+            guard workGroupExpansionOverrides[group.id] == true else {
+                return
+            }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(group.id, anchor: .bottom)
             }
         }
     }
@@ -541,13 +680,6 @@ struct ConversationTimelineView: View {
 
     private func shouldShowReturnToTailButton(timelineItems: [ConversationTimelineItem]) -> Bool {
         !timelineItems.isEmpty && !isPreservingHistoryScroll && (hasUnseenTailMessage || !isTimelineNearBottom)
-    }
-
-    private var returnToTailLabel: some View {
-        Image(systemName: "arrow.down.to.line")
-            .font(themeStore.uiFont(.body, weight: .bold))
-            .foregroundStyle(Color.white)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var returnToTailAccessibilityLabel: String {
@@ -791,6 +923,49 @@ struct ConversationTimelineView: View {
 
     private func currentTimelineTailItemID() -> String? {
         timelineItemCache.tailItemID
+    }
+}
+
+/// 回到底部按钮和滚动实现放在同一文件，避免为单个私有控件扩张工程文件清单。
+private struct ConversationReturnToTailButton: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let tokens: ThemeTokens
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tokens.primaryText)
+                .frame(width: 44, height: 44)
+                .background {
+                    if reduceTransparency {
+                        Circle().fill(tokens.elevatedSurface)
+                    }
+                }
+                // 回到最新是漂浮在内容之上的瞬时控件，使用更通透的原生 Liquid Glass；
+                // 开启“降低透明度”时关闭玻璃并保留上面的实色主题表面。
+                .glassEffect(
+                    reduceTransparency ? .identity : .clear.interactive(),
+                    in: .circle
+                )
+                .overlay {
+                    Circle()
+                        .stroke(
+                            tokens.border.opacity(reduceTransparency ? 0.72 : 0.42),
+                            lineWidth: 0.75
+                        )
+                }
+                .shadow(
+                    color: Color.black.opacity(reduceTransparency ? 0.14 : 0.10),
+                    radius: 7,
+                    y: 3
+                )
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 

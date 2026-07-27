@@ -1,42 +1,44 @@
-//! `turn/*` and `review/*` request handlers + the per-turn event pump.
+//! `turn/*` and `review/*` request handlers + the per-thread event driver.
 //!
 //! Flow on `turn/start`:
 //! 1. Look up the claude process for `thread_id`; a locally-created empty
 //!    thread starts its process lazily on the first valid user input.
-//! 2. Translate `UserInput[]` → claude stream-json user envelope and write
+//! 2. Ensure the process has one event driver that outlives WebSocket
+//!    connections and individual turns.
+//! 3. Mint a fresh codex `turn_id`, hand it to the driver, and mark the pool
+//!    entry active so the LRU reaper leaves it alone.
+//! 4. Translate `UserInput[]` → claude stream-json user envelope and write
 //!    it to stdin.
-//! 3. Mint a fresh codex `turn_id`, register it in [`ACTIVE_TURNS`], and
-//!    mark the pool entry active so the LRU reaper leaves it alone.
-//! 4. Subscribe to the broadcast event channel BEFORE writing the prompt
-//!    so we don't miss the first event.
-//! 5. Spawn a background pump task that runs every event through
-//!    [`EventTranslatorState::translate`] and forwards the resulting
-//!    notifications to the codex client. The pump exits on the terminal
-//!    `result` envelope and emits `turn/completed`.
+//! 5. The driver runs every event through [`EventTranslatorState::translate`],
+//!    persists completed items, and emits `turn/completed` on `result`.
+//!    Output that arrives without a client turn is wrapped in a synthetic turn.
 //!
 //! `turn/steer` writes another user envelope on stdin while a turn is in
-//! flight; the existing pump folds the new events into the same `turn_id`.
+//! flight; the existing driver folds the new events into the same `turn_id`.
 //!
 //! `turn/interrupt` sends SIGINT to the claude child (Unix) or
-//! `child.start_kill()` (Windows) and waits for the pump to emit a Failed
+//! `child.start_kill()` (Windows) and waits for the driver to emit a Failed
 //! `turn/completed`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex as SyncMutex;
+use std::sync::Weak;
 use std::time::{Duration, SystemTime};
 
 use thiserror::Error;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::broadcast;
+use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use alleycat_bridge_core::session::TurnGuard;
 use alleycat_codex_proto as p;
 
 use crate::approval;
 use crate::handlers::model::{normalize_claude_model, normalize_claude_model_id};
-use crate::handlers::thread::resume_cwd_or_fallback;
+use crate::handlers::thread::{cached_thread_turns, resume_cwd_or_fallback};
 use crate::pool::ClaudeProcessHandle;
 use crate::pool::claude_protocol::{ClaudeEvent, ClaudeOutbound, ControlRequestBody};
 use crate::pool::process::ClaudeProcessError;
@@ -51,31 +53,38 @@ use crate::translate::input::translate_user_input;
 const CONTROL_INTERRUPT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Time the bridge gives claude to acknowledge a runtime config setter
-/// (`set_model`, `set_max_thinking_tokens`, `set_permission_mode`). Setters
+/// (`set_model`, `apply_flag_settings`, `set_permission_mode`). Setters
 /// are usually fast (~tens of ms) — keep this tight so a wedged claude
 /// surfaces as an error rather than hanging the turn handler.
 const CONTROL_SET_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Map codex `ReasoningEffort` onto a `--max-thinking-tokens` budget. Values
-/// match the conventions the Anthropic SDK ships with (extended-thinking docs)
-/// — tweak in lockstep with `pi-bridge`'s `ThinkingLevel` if those drift.
-fn effort_to_thinking_tokens(effort: p::ReasoningEffort) -> u32 {
+/// 映射到 Claude Code 原生 effort。新版客户端只会发送最高四档；
+/// 旧客户端残留的 none/minimal/low 统一提升到 medium，保证升级 bridge 后
+/// 不会继续使用已经从产品里移除的低档。
+fn native_effort_level(effort: p::ReasoningEffort) -> &'static str {
     match effort {
-        p::ReasoningEffort::None => 0,
-        p::ReasoningEffort::Minimal => 1024,
-        p::ReasoningEffort::Low => 4096,
-        p::ReasoningEffort::Medium => 16_384,
-        p::ReasoningEffort::High => 32_768,
-        // codex uses XHigh only on a few gpt-5.x models; claude has no
-        // direct equivalent so we cap at the High budget.
-        p::ReasoningEffort::XHigh => 32_768,
-        p::ReasoningEffort::Max => 32_768,
+        p::ReasoningEffort::None
+        | p::ReasoningEffort::Minimal
+        | p::ReasoningEffort::Low
+        | p::ReasoningEffort::Medium => "medium",
+        p::ReasoningEffort::High => "high",
+        p::ReasoningEffort::XHigh => "xhigh",
+        p::ReasoningEffort::Max => "max",
     }
 }
 
-/// 将移动端三档权限映射为 Claude Code 的运行时权限模式。
-/// 沙箱只读优先级最高；只有明确的自动审批组合才启用 `auto`。
+/// 将每个 turn 的协作/权限参数映射为 Claude Code 的运行时权限模式。
+/// collaborationMode 明确为 plan 时只影响本 turn；下一次 default 会重新计算，
+/// 不读取进程上一次的 sticky 状态。只读沙箱仍然必须落到 plan。
 fn claude_permission_mode(params: &p::TurnStartParams) -> &'static str {
+    if params
+        .collaboration_mode
+        .as_ref()
+        .and_then(collaboration_mode_name)
+        == Some("plan")
+    {
+        return "plan";
+    }
     if params.sandbox_policy.as_ref().is_some_and(is_read_only) {
         return "plan";
     }
@@ -88,6 +97,14 @@ fn claude_permission_mode(params: &p::TurnStartParams) -> &'static str {
         return "auto";
     }
     "default"
+}
+
+fn collaboration_mode_name(value: &serde_json::Value) -> Option<&str> {
+    match value {
+        serde_json::Value::String(mode) => Some(mode.as_str()),
+        serde_json::Value::Object(map) => map.get("mode").and_then(serde_json::Value::as_str),
+        _ => None,
+    }
 }
 
 fn is_read_only(value: &serde_json::Value) -> bool {
@@ -106,9 +123,32 @@ fn is_read_only(value: &serde_json::Value) -> bool {
 static ACTIVE_TURNS: LazyLock<SyncMutex<HashMap<String, ActiveTurn>>> =
     LazyLock::new(|| SyncMutex::new(HashMap::new()));
 
+/// 每个 Claude 子进程只能有一个 stdout 消费者。事件驱动器按 thread 常驻，
+/// 不随页面、WebSocket 或单个 turn 的结束而销毁。
+static EVENT_DRIVERS: LazyLock<SyncMutex<HashMap<String, EventDriverRegistration>>> =
+    LazyLock::new(|| SyncMutex::new(HashMap::new()));
+
 #[derive(Clone)]
 struct ActiveTurn {
     turn_id: String,
+}
+
+struct EventDriverRegistration {
+    generation: String,
+    process: Weak<ClaudeProcessHandle>,
+    commands: mpsc::UnboundedSender<EventDriverCommand>,
+}
+
+enum EventDriverCommand {
+    BeginTurn {
+        turn_id: String,
+        started_at: i64,
+        turn_guard: TurnGuard,
+        ready: oneshot::Sender<Result<(), String>>,
+    },
+    AbortTurn {
+        turn_id: String,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -123,6 +163,8 @@ pub enum TurnError {
     NoActiveTurn(String),
     #[error("input translation failed: {0}")]
     InputTranslation(String),
+    #[error("model `{model}` was rejected before turn creation: {message}")]
+    ModelRejected { model: String, message: String },
     #[error("claude rpc error: {0}")]
     ClaudeRpc(String),
     #[error("review/start is not implemented in claude-bridge v1")]
@@ -136,9 +178,24 @@ impl TurnError {
             | TurnError::TurnIdMismatch { .. }
             | TurnError::ThreadNotLoaded(_)
             | TurnError::NoActiveTurn(_)
-            | TurnError::InputTranslation(_) => p::error_codes::INVALID_PARAMS,
+            | TurnError::InputTranslation(_)
+            | TurnError::ModelRejected { .. } => p::error_codes::INVALID_PARAMS,
             TurnError::ReviewUnsupported => p::error_codes::METHOD_NOT_FOUND,
             TurnError::ClaudeRpc(_) => p::error_codes::INTERNAL_ERROR,
+        }
+    }
+
+    pub fn rpc_data(&self) -> Option<serde_json::Value> {
+        match self {
+            TurnError::ModelRejected { model, message } => Some(serde_json::json!({
+                "accepted": false,
+                "field": "model",
+                "model": model,
+                "phase": "runtime_overrides",
+                "reason": message,
+                "retryable": false,
+            })),
+            _ => None,
         }
     }
 }
@@ -188,32 +245,56 @@ pub async fn handle_turn_start(
         }
     };
 
+    // App 可以绕过显式 thread/resume 直接开始 turn。此时也要先把 JSONL
+    // 历史播种进共享内存日志，保证后续 thread/read 返回完整会话而非仅本轮。
+    if state.thread_log(&params.thread_id).is_empty()
+        && let Some(entry) = state.thread_index().lookup(&params.thread_id).await
+    {
+        let _ = cached_thread_turns(state, &entry).await;
+    }
+
     // Apply per-turn runtime overrides via in-band control_requests BEFORE
     // writing the user envelope. The handle diffs against its cached state so
     // a turn that doesn't change the model/effort is a no-op (zero RTT).
     let normalized_model_override = params.model.as_deref().map(normalize_claude_model_id);
     let model_override = normalized_model_override.as_deref();
-    let thinking_override = params.effort.map(effort_to_thinking_tokens);
+    let effort_override = params.effort.map(native_effort_level);
     let permission_mode = claude_permission_mode(&params);
     if let Err(err) = handle
         .apply_runtime_overrides(
             model_override,
-            thinking_override,
+            effort_override,
             Some(permission_mode),
             CONTROL_SET_TIMEOUT,
         )
         .await
     {
+        if let Some((model, message)) = explicit_model_rejection(&err) {
+            tracing::warn!(
+                thread_id = %params.thread_id,
+                model = %model,
+                reason = %message,
+                accepted = false,
+                "claude rejected model before turn creation"
+            );
+            return Err(TurnError::ModelRejected { model, message });
+        }
         return Err(TurnError::ClaudeRpc(format!(
             "applying runtime overrides: {err}"
         )));
     }
 
     let turn_id = Uuid::now_v7().to_string();
-    register_active_turn(&params.thread_id, &turn_id);
+    let driver = ensure_event_driver(state, &params.thread_id, &handle);
     state.claude_pool().mark_active(&params.thread_id).await;
 
     let started_at = now_unix_secs();
+    let turn_guard = state.session().begin_turn();
+    if let Err(message) = begin_driver_turn(&driver, &turn_id, started_at, turn_guard).await {
+        state.claude_pool().mark_idle(&params.thread_id).await;
+        return Err(TurnError::ClaudeRpc(message));
+    }
+
     // Codex emits `startedAt: null` on the turn/start response but
     // populates it on the turn/started notification.
     let turn_for_notif = p::Turn {
@@ -229,6 +310,9 @@ pub async fn handle_turn_start(
     let mut turn = turn_for_notif.clone();
     turn.started_at = None;
 
+    // 先落 live cache，再发布通知。客户端收到通知后可能立刻 thread/read；
+    // 记录顺序反过来会让这次读取短暂看不到刚开始的 turn。
+    state.record_turn_started(&params.thread_id, turn_id.clone(), started_at);
     if state.should_emit("turn/started") {
         let frame = notification_frame(p::ServerNotification::TurnStarted(
             p::TurnStartedNotification {
@@ -238,7 +322,6 @@ pub async fn handle_turn_start(
         ));
         let _ = state.send(frame);
     }
-    state.record_turn_started(&params.thread_id, turn_id.clone(), started_at);
 
     // Echo the user input back as a userMessage item lifecycle (codex
     // does this; see codex-rs app-server-protocol/src/protocol/v2.rs:5330).
@@ -246,7 +329,9 @@ pub async fn handle_turn_start(
     let user_message_item = p::ThreadItem::UserMessage {
         id: Uuid::now_v7().to_string(),
         content: params.input.clone(),
+        client_id: params.client_user_message_id.clone(),
     };
+    state.record_item(&params.thread_id, &turn_id, user_message_item.clone());
     if state.should_emit("item/started") {
         let frame = notification_frame(p::ServerNotification::ItemStarted(
             p::ItemStartedNotification {
@@ -269,27 +354,101 @@ pub async fn handle_turn_start(
         ));
         let _ = state.send(frame);
     }
-    state.record_item(&params.thread_id, &turn_id, user_message_item);
-
-    // Subscribe BEFORE writing the prompt so the first event isn't lost.
-    let events_rx = handle.subscribe_events();
 
     if let Err(e) = handle.send_serialized(&envelope) {
+        let _ = driver.send(EventDriverCommand::AbortTurn {
+            turn_id: turn_id.clone(),
+        });
         clear_active_turn(&params.thread_id);
         state.claude_pool().mark_idle(&params.thread_id).await;
         return Err(TurnError::ClaudeRpc(e.to_string()));
     }
 
-    spawn_event_pump(EventPumpArgs {
-        state: Arc::clone(state),
-        thread_id: params.thread_id.clone(),
-        turn_id: turn_id.clone(),
-        handle: Arc::clone(&handle),
-        events_rx,
-        started_at,
-    });
+    // Backfill the thread preview from the first user message. AppServer
+    // threads are created with an empty preview (thread/start) and, unlike
+    // codex, nothing else fills it in — so clients would fall back to the
+    // "Thread <id>" placeholder title. Mirror the on-disk hydrator, which
+    // uses the first user message's first line as the preview.
+    maybe_backfill_preview(state, &params.thread_id, &params.input).await;
 
     Ok(p::TurnStartResponse { turn })
+}
+
+fn explicit_model_rejection(err: &ClaudeProcessError) -> Option<(String, String)> {
+    match err {
+        ClaudeProcessError::RuntimeOverride {
+            field: "model",
+            value,
+            source,
+        } => match source.as_ref() {
+            ClaudeProcessError::ControlError { message, .. }
+                if is_explicit_invalid_model_message(message) =>
+            {
+                Some((value.clone(), message.clone()))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_explicit_invalid_model_message(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    [
+        "not a recognized model",
+        "unrecognized model",
+        "invalid model",
+        "unknown model",
+        "no such model",
+        "model not found",
+        "no rollout found",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+/// If the thread's preview is still empty, backfill it from the first line of
+/// the user's message. Fire-and-forget: any lookup/persist failure is ignored
+/// since a missing preview only degrades the title, never the turn.
+async fn maybe_backfill_preview(
+    state: &Arc<ConnectionState>,
+    thread_id: &str,
+    input: &[p::UserInput],
+) {
+    let Some(entry) = state.thread_index().lookup(thread_id).await else {
+        return;
+    };
+    if !entry.preview.trim().is_empty() {
+        return;
+    }
+    let Some(preview) = preview_from_input(input) else {
+        return;
+    };
+    let _ = state
+        .thread_index()
+        .update_preview_and_updated_at(thread_id, preview, chrono::Utc::now())
+        .await;
+}
+
+/// Derive a one-line preview from the user input, matching the on-disk
+/// hydrator: the first non-empty line of the concatenated text chunks.
+fn preview_from_input(input: &[p::UserInput]) -> Option<String> {
+    let mut text = String::new();
+    for item in input {
+        match item {
+            p::UserInput::Text { text: t, .. } => text.push_str(t),
+            p::UserInput::Skill { name, .. } => text.push_str(&format!("/{name}")),
+            p::UserInput::Mention { name, .. } => {
+                text.push('@');
+                text.push_str(name);
+            }
+            _ => {}
+        }
+    }
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
 }
 
 // ============================================================================
@@ -419,6 +578,16 @@ fn clear_active_turn(thread_id: &str) {
     ACTIVE_TURNS.lock().unwrap().remove(thread_id);
 }
 
+fn clear_active_turn_if(thread_id: &str, turn_id: &str) {
+    let mut turns = ACTIVE_TURNS.lock().unwrap();
+    if turns
+        .get(thread_id)
+        .is_some_and(|active| active.turn_id == turn_id)
+    {
+        turns.remove(thread_id);
+    }
+}
+
 fn notification_frame(notif: p::ServerNotification) -> p::JsonRpcMessage {
     let value = serde_json::to_value(&notif).expect("ServerNotification serializes");
     let method = value
@@ -434,54 +603,279 @@ fn notification_frame(notif: p::ServerNotification) -> p::JsonRpcMessage {
     })
 }
 
-struct EventPumpArgs {
+struct EventDriverArgs {
     state: Arc<ConnectionState>,
     thread_id: String,
-    turn_id: String,
-    /// Held by the pump so it can reply to inbound `control_request` envelopes
-    /// (e.g. `can_use_tool` HITL prompts) on the same process that sent them.
-    handle: Arc<ClaudeProcessHandle>,
+    /// 进程池是 Claude 子进程唯一的生命周期所有者。driver 只保留弱引用，
+    /// 这样空闲回收/显式关闭进程后 broadcast sender 能真正释放，driver
+    /// 随之收到 Closed 并退出，不会为每个历史 thread 残留一个任务。
+    handle: Weak<ClaudeProcessHandle>,
     events_rx: broadcast::Receiver<ClaudeEvent>,
+    exit_rx: watch::Receiver<bool>,
+    commands_rx: mpsc::UnboundedReceiver<EventDriverCommand>,
+    generation: String,
+}
+
+struct DrivenTurn {
+    turn_id: String,
     started_at: i64,
+    translator: EventTranslatorState,
+    error_message: Option<String>,
+    interaction_gate: Arc<AsyncMutex<()>>,
+    interaction_tasks: Vec<tokio::task::JoinHandle<()>>,
+    turn_guard: TurnGuard,
+    autonomous: bool,
 }
 
-fn spawn_event_pump(args: EventPumpArgs) {
-    tokio::spawn(async move {
-        run_event_pump(args).await;
-    });
+impl DrivenTurn {
+    fn new(
+        thread_id: &str,
+        turn_id: String,
+        started_at: i64,
+        turn_guard: TurnGuard,
+        autonomous: bool,
+    ) -> Self {
+        Self {
+            translator: EventTranslatorState::new(thread_id.to_string(), turn_id.clone()),
+            turn_id,
+            started_at,
+            error_message: None,
+            interaction_gate: Arc::new(AsyncMutex::new(())),
+            interaction_tasks: Vec::new(),
+            turn_guard,
+            autonomous,
+        }
+    }
 }
 
-async fn run_event_pump(mut args: EventPumpArgs) {
-    let mut translator = EventTranslatorState::new(args.thread_id.clone(), args.turn_id.clone());
-    let mut error_message: Option<String> = None;
-    // Claude 可并发发出多个 can_use_tool；移动端一次只展示一个交互，
-    // 用同一把公平锁保证审批和提问按到达顺序串行完成。
-    let interaction_gate = Arc::new(AsyncMutex::new(()));
-    let mut interaction_tasks = Vec::new();
+#[derive(Default)]
+struct BackgroundWork {
+    seen_tool_uses: HashSet<String>,
+    pending_wakeups: usize,
+    persistent_crons: usize,
+    session_guard: Option<TurnGuard>,
+}
+
+impl BackgroundWork {
+    fn observe(&mut self, payload: &ClaudeOutbound) {
+        for (id, name) in background_tool_uses(payload) {
+            if !self.seen_tool_uses.insert(id) {
+                continue;
+            }
+            match name.as_str() {
+                // ScheduleWakeup 是一次性唤醒；下一段自主输出开始时消费一个。
+                "ScheduleWakeup" => self.pending_wakeups += 1,
+                // CronCreate 可能是重复任务，只有显式 CronDelete 才释放常驻。
+                "CronCreate" => self.persistent_crons += 1,
+                "CronDelete" => {
+                    self.persistent_crons = self.persistent_crons.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn consume_autonomous_wakeup(&mut self) {
+        self.pending_wakeups = self.pending_wakeups.saturating_sub(1);
+    }
+
+    fn has_pending(&self) -> bool {
+        self.pending_wakeups > 0 || self.persistent_crons > 0
+    }
+}
+
+fn background_tool_uses(payload: &ClaudeOutbound) -> Vec<(String, String)> {
+    use crate::pool::claude_protocol::{ContentBlock, RawAnthropicEvent};
+
+    match payload {
+        ClaudeOutbound::Assistant(env) => env
+            .message
+            .get("content")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|block| {
+                if block.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
+                    return None;
+                }
+                Some((
+                    block
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)?
+                        .to_string(),
+                    block
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)?
+                        .to_string(),
+                ))
+            })
+            .collect(),
+        ClaudeOutbound::StreamEvent(env) => match &env.event {
+            RawAnthropicEvent::ContentBlockStart {
+                content_block: ContentBlock::ToolUse { id, name, .. },
+                ..
+            } => vec![(id.clone(), name.clone())],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn ensure_event_driver(
+    state: &Arc<ConnectionState>,
+    thread_id: &str,
+    handle: &Arc<ClaudeProcessHandle>,
+) -> mpsc::UnboundedSender<EventDriverCommand> {
+    let mut drivers = EVENT_DRIVERS.lock().unwrap();
+    if let Some(existing) = drivers.get(thread_id)
+        && !existing.commands.is_closed()
+        && existing
+            .process
+            .upgrade()
+            .is_some_and(|process| Arc::ptr_eq(&process, handle))
+    {
+        return existing.commands.clone();
+    }
+
+    let generation = Uuid::now_v7().to_string();
+    let (commands_tx, commands_rx) = mpsc::unbounded_channel();
+    let args = EventDriverArgs {
+        state: Arc::clone(state),
+        thread_id: thread_id.to_string(),
+        handle: Arc::downgrade(handle),
+        events_rx: handle.subscribe_events(),
+        exit_rx: handle.subscribe_exit(),
+        commands_rx,
+        generation: generation.clone(),
+    };
+    drivers.insert(
+        thread_id.to_string(),
+        EventDriverRegistration {
+            generation,
+            process: Arc::downgrade(handle),
+            commands: commands_tx.clone(),
+        },
+    );
+    drop(drivers);
+
+    tokio::spawn(run_event_driver(args));
+    commands_tx
+}
+
+async fn begin_driver_turn(
+    driver: &mpsc::UnboundedSender<EventDriverCommand>,
+    turn_id: &str,
+    started_at: i64,
+    turn_guard: TurnGuard,
+) -> Result<(), String> {
+    let (ready_tx, ready_rx) = oneshot::channel();
+    driver
+        .send(EventDriverCommand::BeginTurn {
+            turn_id: turn_id.to_string(),
+            started_at,
+            turn_guard,
+            ready: ready_tx,
+        })
+        .map_err(|_| "claude thread event driver is not running".to_string())?;
+    ready_rx
+        .await
+        .map_err(|_| "claude thread event driver stopped before accepting turn".to_string())?
+}
+
+async fn run_event_driver(mut args: EventDriverArgs) {
+    let mut current: Option<DrivenTurn> = None;
+    let mut background = BackgroundWork::default();
 
     loop {
-        let event = match args.events_rx.recv().await {
+        if *args.exit_rx.borrow() {
+            if let Some(turn) = current.as_mut() {
+                turn.error_message = Some("claude process exited unexpectedly".into());
+            }
+            break;
+        }
+        let received = tokio::select! {
+            biased;
+            command = args.commands_rx.recv() => {
+                match command {
+                    Some(EventDriverCommand::BeginTurn {
+                        turn_id,
+                        started_at,
+                        turn_guard,
+                        ready,
+                    }) => {
+                        if let Some(active) = current.as_ref() {
+                            let _ = ready.send(Err(format!(
+                                "thread `{}` already has active turn `{}`",
+                                args.thread_id, active.turn_id
+                            )));
+                            continue;
+                        }
+                        // 当前 turn 的 guard 已覆盖 session；后台等待 guard 暂时
+                        // 释放，结束时如果仍有 cron/wakeup 会重新建立。
+                        background.session_guard.take();
+                        register_active_turn(&args.thread_id, &turn_id);
+                        current = Some(DrivenTurn::new(
+                            &args.thread_id,
+                            turn_id,
+                            started_at,
+                            turn_guard,
+                            false,
+                        ));
+                        let _ = ready.send(Ok(()));
+                    }
+                    Some(EventDriverCommand::AbortTurn { turn_id }) => {
+                        if current.as_ref().is_some_and(|turn| turn.turn_id == turn_id) {
+                            let mut turn = current.take().unwrap();
+                            for task in turn.interaction_tasks.drain(..) {
+                                task.abort();
+                            }
+                            clear_active_turn_if(&args.thread_id, &turn_id);
+                            drop(turn.turn_guard);
+                        }
+                        continue;
+                    }
+                    None => break,
+                }
+                continue;
+            }
+            // stdout reader 先广播完最后一批 assistant/result，再设置退出信号。
+            // event 分支排在 exit 前面，保证两个 future 同时 ready 时先排空消息。
+            received = args.events_rx.recv() => received,
+            exited = args.exit_rx.changed() => {
+                if exited.is_err() || *args.exit_rx.borrow() {
+                    if let Some(turn) = current.as_mut() {
+                        turn.error_message = Some("claude process exited unexpectedly".into());
+                    }
+                    break;
+                }
+                continue;
+            }
+        };
+        let event = match received {
             Ok(ev) => ev,
             Err(broadcast::error::RecvError::Lagged(n)) => {
                 tracing::warn!(
                     thread_id = %args.thread_id,
-                    turn_id = %args.turn_id,
-                    "event pump lagged by {n} events; some notifications dropped"
+                    "thread event driver lagged by {n} events; some notifications dropped"
                 );
                 continue;
             }
             Err(broadcast::error::RecvError::Closed) => {
-                error_message = Some("claude process exited unexpectedly".into());
+                if let Some(turn) = current.as_mut() {
+                    turn.error_message = Some("claude process exited unexpectedly".into());
+                }
                 break;
             }
         };
 
         let payload = event.payload;
-        // Side-effect routes: refresh bridge caches and bridge HITL prompts.
+        background.observe(&payload);
+
+        // 与 turn 无关的 runtime 事件始终处理；页面不在场也要更新权威缓存。
         let mut account_notifications = Vec::new();
         match &payload {
             ClaudeOutbound::System(crate::pool::claude_protocol::SystemEvent::Init(init)) => {
-                args.state.refresh_init_cache((**init).clone());
+                args.state.refresh_init_cache(init.as_ref().clone());
             }
             ClaudeOutbound::RateLimitEvent(env) => {
                 let infos = args
@@ -490,18 +884,39 @@ async fn run_event_pump(mut args: EventPumpArgs) {
                 account_notifications
                     .push(super::lifecycle::rate_limit_updated_notification(&infos));
             }
+            _ => {}
+        }
+        for notif in account_notifications {
+            if state_should_emit(&args.state, &notif) {
+                let _ = args.state.send(notification_frame(notif));
+            }
+        }
+
+        if current.is_none() && is_turn_scoped_event(&payload) {
+            current = Some(begin_autonomous_turn(&args, &mut background).await);
+        }
+        let Some(turn) = current.as_mut() else {
+            continue;
+        };
+
+        // Side-effect routes: bridge HITL prompts while this logical turn lives.
+        match &payload {
             ClaudeOutbound::ControlRequest(value) => {
                 // Spawn the HITL handler off the pump so the codex round-trip
                 // (which can sit on a phone for minutes) doesn't block
                 // subsequent stream events.
-                if let Some(req) = approval::parse_can_use_tool(value) {
+                if let Some(req) = approval::parse_can_use_tool(&value) {
+                    let Some(handle) = args.handle.upgrade() else {
+                        turn.error_message =
+                            Some("claude process exited while requesting approval".into());
+                        continue;
+                    };
                     let state = Arc::clone(&args.state);
-                    let handle = Arc::clone(&args.handle);
                     let thread_id = args.thread_id.clone();
-                    let turn_id = args.turn_id.clone();
+                    let turn_id = turn.turn_id.clone();
                     let request_id = req.request_id.clone();
-                    let interaction_gate = Arc::clone(&interaction_gate);
-                    interaction_tasks.push(tokio::spawn(async move {
+                    let interaction_gate = Arc::clone(&turn.interaction_gate);
+                    turn.interaction_tasks.push(tokio::spawn(async move {
                         let _guard = interaction_gate.lock().await;
                         match approval::handle_can_use_tool(
                             &state, &handle, &thread_id, &turn_id, req,
@@ -527,11 +942,16 @@ async fn run_event_pump(mut args: EventPumpArgs) {
                 {
                     // Unknown subtype (hook_callback / mcp_message / future).
                     // Reply with error so claude doesn't hang.
-                    approval::reply_control_error(
-                        &args.handle,
-                        request_id,
-                        "bridge does not handle this control_request subtype yet",
-                    );
+                    if let Some(handle) = args.handle.upgrade() {
+                        approval::reply_control_error(
+                            &handle,
+                            request_id,
+                            "bridge does not handle this control_request subtype yet",
+                        );
+                    } else {
+                        turn.error_message =
+                            Some("claude process exited during control request".into());
+                    }
                 }
             }
             _ => {}
@@ -539,62 +959,147 @@ async fn run_event_pump(mut args: EventPumpArgs) {
         let is_terminal = matches!(payload, ClaudeOutbound::Result(_));
         if let ClaudeOutbound::Result(ref r) = payload {
             if r.is_error || r.subtype != "success" {
-                error_message = Some(r.result.clone().filter(|s| !s.is_empty()).unwrap_or_else(
-                    || {
-                        format!(
-                            "claude turn ended with subtype {} (terminal_reason={:?})",
-                            r.subtype, r.terminal_reason
-                        )
-                    },
-                ));
+                turn.error_message = Some(
+                    r.result
+                        .clone()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| {
+                            format!(
+                                "claude turn ended with subtype {} (terminal_reason={:?})",
+                                r.subtype, r.terminal_reason
+                            )
+                        }),
+                );
             }
         }
 
-        let notifications = account_notifications
-            .into_iter()
-            .chain(translator.translate(payload));
+        let notifications = turn.translator.translate(payload);
         for notif in notifications {
-            if !state_should_emit(&args.state, &notif) {
-                continue;
-            }
             // Record completed items in the per-thread log so `thread/read`
             // can answer from memory immediately after `turn/completed`,
             // without waiting for claude's process to flush its on-disk
-            // JSONL (which has a small but reliable lag and otherwise drops
-            // the assistant message in fast back-to-back reads).
+            // JSONL. Recording is independent from notification opt-out:
+            // disabling an event must not delete it from authoritative reads.
             if let p::ServerNotification::ItemCompleted(ref n) = notif {
                 args.state
-                    .record_item(&args.thread_id, &args.turn_id, n.item.clone());
+                    .record_item(&args.thread_id, &turn.turn_id, n.item.clone());
+            }
+            if !state_should_emit(&args.state, &notif) {
+                continue;
             }
             let frame = notification_frame(notif);
             let _ = args.state.send(frame);
         }
 
         if is_terminal {
-            break;
+            let completed = current.take().unwrap();
+            finish_driven_turn(&args, completed, &mut background).await;
         }
     }
 
+    if let Some(mut turn) = current.take() {
+        if turn.error_message.is_none() {
+            turn.error_message = Some("claude process event stream closed".into());
+        }
+        finish_driven_turn(&args, turn, &mut background).await;
+    }
+
+    let mut drivers = EVENT_DRIVERS.lock().unwrap();
+    if drivers
+        .get(&args.thread_id)
+        .is_some_and(|driver| driver.generation == args.generation)
+    {
+        drivers.remove(&args.thread_id);
+    }
+}
+
+fn is_turn_scoped_event(payload: &ClaudeOutbound) -> bool {
+    matches!(
+        payload,
+        ClaudeOutbound::StreamEvent(_)
+            | ClaudeOutbound::Assistant(_)
+            | ClaudeOutbound::User(_)
+            | ClaudeOutbound::Result(_)
+            | ClaudeOutbound::ControlRequest(_)
+    )
+}
+
+async fn begin_autonomous_turn(
+    args: &EventDriverArgs,
+    background: &mut BackgroundWork,
+) -> DrivenTurn {
+    background.consume_autonomous_wakeup();
+    let turn_id = Uuid::now_v7().to_string();
+    let started_at = now_unix_secs();
+    let turn_guard = args.state.session().begin_turn();
+    background.session_guard.take();
+    args.state.claude_pool().mark_active(&args.thread_id).await;
+    register_active_turn(&args.thread_id, &turn_id);
+
+    let turn = p::Turn {
+        id: turn_id.clone(),
+        items: Vec::new(),
+        items_view: p::default_items_view(),
+        status: p::TurnStatus::InProgress,
+        error: None,
+        started_at: Some(started_at),
+        completed_at: None,
+        duration_ms: None,
+    };
+    args.state
+        .record_turn_started(&args.thread_id, turn_id.clone(), started_at);
+    if args.state.should_emit("turn/started") {
+        let _ = args
+            .state
+            .send(notification_frame(p::ServerNotification::TurnStarted(
+                p::TurnStartedNotification {
+                    thread_id: args.thread_id.clone(),
+                    turn,
+                },
+            )));
+    }
+    tracing::info!(
+        thread_id = %args.thread_id,
+        turn_id = %turn_id,
+        "claude produced output outside a client turn; started autonomous turn"
+    );
+
+    DrivenTurn::new(&args.thread_id, turn_id, started_at, turn_guard, true)
+}
+
+async fn finish_driven_turn(
+    args: &EventDriverArgs,
+    mut driven: DrivenTurn,
+    background: &mut BackgroundWork,
+) {
     // turn 结束或进程断开时取消所有等待中的移动端交互；
     // approval::PendingRequestGuard 会同步回收 pending request 槽位。
-    for task in interaction_tasks {
+    for task in driven.interaction_tasks.drain(..) {
         task.abort();
     }
 
-    // Emit turn/completed regardless of how we exited.
-    let (status, error) = turn_status_from_result(error_message.as_deref());
+    let (status, error) = turn_status_from_result(driven.error_message.as_deref());
     let completed_at = now_unix_secs();
-    let duration_ms = ((completed_at - args.started_at) * 1000).max(0);
+    let duration_ms = ((completed_at - driven.started_at) * 1000).max(0);
     let turn = p::Turn {
-        id: args.turn_id.clone(),
+        id: driven.turn_id.clone(),
         items: Vec::new(),
         items_view: p::default_items_view(),
         status,
         error: error.clone(),
-        started_at: Some(args.started_at),
+        started_at: Some(driven.started_at),
         completed_at: Some(completed_at),
         duration_ms: Some(duration_ms),
     };
+    // Terminal 状态先进入 live cache，保证通知一旦可见，随后所有历史读取
+    // 都能看到同一个完成边界。
+    args.state.record_turn_completed(
+        &args.thread_id,
+        &driven.turn_id,
+        completed_at,
+        status,
+        error.clone(),
+    );
     if args.state.should_emit("turn/completed") {
         let frame = notification_frame(p::ServerNotification::TurnCompleted(
             p::TurnCompletedNotification {
@@ -604,11 +1109,39 @@ async fn run_event_pump(mut args: EventPumpArgs) {
         ));
         let _ = args.state.send(frame);
     }
-    args.state
-        .record_turn_completed(&args.thread_id, &args.turn_id, completed_at, status, error);
+    clear_active_turn_if(&args.thread_id, &driven.turn_id);
 
-    clear_active_turn(&args.thread_id);
-    args.state.claude_pool().mark_idle(&args.thread_id).await;
+    // 列表的 updatedAt 也要由后台回复推进，否则用户重新打开 App 时，
+    // 有新结果的会话仍会沉在旧位置。
+    if let Some(entry) = args.state.thread_index().lookup(&args.thread_id).await {
+        let _ = args
+            .state
+            .thread_index()
+            .update_preview_and_updated_at(&args.thread_id, entry.preview, chrono::Utc::now())
+            .await;
+    }
+
+    // 在释放当前 turn guard 之前接续后台 guard，避免 session reaper 在两者
+    // 之间看到一个错误的空闲窗口。
+    if background.has_pending() && background.session_guard.is_none() {
+        background.session_guard = Some(args.state.session().begin_turn());
+    }
+    drop(driven.turn_guard);
+
+    if background.has_pending() {
+        args.state.claude_pool().mark_active(&args.thread_id).await;
+    } else {
+        args.state.claude_pool().mark_idle(&args.thread_id).await;
+    }
+
+    tracing::debug!(
+        thread_id = %args.thread_id,
+        turn_id = %driven.turn_id,
+        autonomous = driven.autonomous,
+        pending_wakeups = background.pending_wakeups,
+        persistent_crons = background.persistent_crons,
+        "claude logical turn completed"
+    );
 }
 
 /// Map a `ServerNotification` to its `method` string and consult the
@@ -699,11 +1232,78 @@ mod tests {
         assert!(matches!(err, TurnError::ThreadNotLoaded(_)));
     }
 
+    fn text_input(s: &str) -> p::UserInput {
+        p::UserInput::Text {
+            text: s.into(),
+            text_elements: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn preview_uses_first_non_empty_line() {
+        let input = vec![text_input("\n  \n第一行标题\n第二行\n")];
+        assert_eq!(preview_from_input(&input).as_deref(), Some("第一行标题"));
+    }
+
+    #[test]
+    fn preview_none_when_no_text() {
+        let input = vec![p::UserInput::Image { url: "x".into() }];
+        assert_eq!(preview_from_input(&input), None);
+    }
+
+    #[tokio::test]
+    async fn backfill_sets_empty_preview_and_leaves_existing() {
+        let state = dummy_state().await;
+        let entry = |id: &str, preview: &str| crate::index::IndexEntry {
+            thread_id: id.into(),
+            cwd: "/tmp".into(),
+            name: None,
+            preview: preview.into(),
+            created_at: 0,
+            updated_at: 0,
+            archived: false,
+            forked_from_id: None,
+            model_provider: "anthropic".into(),
+            source: p::ThreadSourceKind::AppServer,
+            metadata: crate::index::ClaudeSessionRef {
+                claude_session_path: "/tmp/a.jsonl".into(),
+                claude_session_id: id.into(),
+            },
+        };
+        state
+            .thread_index()
+            .insert(entry("empty", ""))
+            .await
+            .unwrap();
+        state
+            .thread_index()
+            .insert(entry("named", "已有预览"))
+            .await
+            .unwrap();
+
+        let input = vec![text_input("你好世界\n更多内容")];
+        maybe_backfill_preview(&state, "empty", &input).await;
+        maybe_backfill_preview(&state, "named", &input).await;
+
+        assert_eq!(
+            state.thread_index().lookup("empty").await.unwrap().preview,
+            "你好世界"
+        );
+        assert_eq!(
+            state.thread_index().lookup("named").await.unwrap().preview,
+            "已有预览"
+        );
+    }
+
     #[test]
     fn permission_modes_follow_the_three_safe_presets() {
         let mut params = p::TurnStartParams::default();
         assert_eq!(claude_permission_mode(&params), "default");
 
+        params.collaboration_mode = Some(serde_json::json!({"mode": "plan", "settings": {}}));
+        assert_eq!(claude_permission_mode(&params), "plan");
+
+        params.collaboration_mode = Some(serde_json::json!({"mode": "default", "settings": {}}));
         params.sandbox_policy = Some(serde_json::json!({"type": "readOnly"}));
         assert_eq!(claude_permission_mode(&params), "plan");
 
@@ -714,6 +1314,45 @@ mod tests {
 
         params.approval_policy = Some(p::AskForApproval::Never);
         assert_eq!(claude_permission_mode(&params), "default");
+    }
+
+    #[test]
+    fn only_explicit_invalid_model_control_errors_are_permanent_rejections() {
+        let invalid = ClaudeProcessError::RuntimeOverride {
+            field: "model",
+            value: "019f9e54-bad2".into(),
+            source: Box::new(ClaudeProcessError::ControlError {
+                request_id: "set-model".into(),
+                message: "Model is not a recognized model id".into(),
+            }),
+        };
+        assert_eq!(
+            explicit_model_rejection(&invalid),
+            Some((
+                "019f9e54-bad2".into(),
+                "Model is not a recognized model id".into()
+            ))
+        );
+
+        let transient = ClaudeProcessError::RuntimeOverride {
+            field: "model",
+            value: "sonnet".into(),
+            source: Box::new(ClaudeProcessError::ControlError {
+                request_id: "set-model".into(),
+                message: "service temporarily unavailable".into(),
+            }),
+        };
+        assert_eq!(explicit_model_rejection(&transient), None);
+    }
+
+    #[test]
+    fn native_effort_keeps_the_top_four_levels_and_clamps_legacy_low_values() {
+        assert_eq!(native_effort_level(p::ReasoningEffort::Medium), "medium");
+        assert_eq!(native_effort_level(p::ReasoningEffort::High), "high");
+        assert_eq!(native_effort_level(p::ReasoningEffort::XHigh), "xhigh");
+        assert_eq!(native_effort_level(p::ReasoningEffort::Max), "max");
+        assert_eq!(native_effort_level(p::ReasoningEffort::Minimal), "medium");
+        assert_eq!(native_effort_level(p::ReasoningEffort::Low), "medium");
     }
 
     #[tokio::test]
@@ -791,6 +1430,22 @@ mod tests {
         assert_eq!(
             TurnError::ClaudeRpc("oops".into()).rpc_code(),
             p::error_codes::INTERNAL_ERROR
+        );
+        let rejected = TurnError::ModelRejected {
+            model: "unknown-model".into(),
+            message: "not recognized".into(),
+        };
+        assert_eq!(rejected.rpc_code(), p::error_codes::INVALID_PARAMS);
+        assert_eq!(
+            rejected.rpc_data(),
+            Some(serde_json::json!({
+                "accepted": false,
+                "field": "model",
+                "model": "unknown-model",
+                "phase": "runtime_overrides",
+                "reason": "not recognized",
+                "retryable": false,
+            }))
         );
     }
 }

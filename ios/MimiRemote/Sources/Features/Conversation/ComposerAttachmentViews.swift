@@ -260,6 +260,7 @@ enum AddContentPanelPage: Equatable {
     case root
     case plugins
     case skills
+    case permissions
     case shortcuts
 }
 
@@ -276,10 +277,14 @@ struct AddContentPanel: View {
     let pluginShortcuts: [CodexPluginCapability]
     let capabilityErrorMessage: String?
     let isRefreshingCapabilities: Bool
+    let showsPermissionSettings: Bool
+    let permissionModes: [ComposerPermissionMode]
+    let selectedPermissionMode: ComposerPermissionMode
     let onPickPhotos: () -> Void
     let onSkillShortcut: (SkillCapability) -> Void
     let onPluginShortcut: (CodexPluginCapability) -> Void
     let onRefreshCapabilities: () -> Void
+    let onPermissionMode: (ComposerPermissionMode) -> Void
     let onShortcut: (String) -> Void
 
     var body: some View {
@@ -297,6 +302,8 @@ struct AddContentPanel: View {
                     pluginList(tokens: tokens)
                 case .skills:
                     skillList(tokens: tokens)
+                case .permissions:
+                    permissionList(tokens: tokens)
                 case .shortcuts:
                     shortcutList(tokens: tokens)
                 }
@@ -328,7 +335,7 @@ struct AddContentPanel: View {
             }
         }
         // compact adaptation 默认会拉成大页；固定内容高度能消除“下半屏全空”的原始感。
-        .presentationDetents([.height(page == .root ? 390 : 470)])
+        .presentationDetents([.height(page == .root ? rootPanelHeight : 470)])
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(28)
     }
@@ -405,6 +412,16 @@ struct AddContentPanel: View {
                 tokens: tokens
             ) {
                 page = .skills
+            }
+            if showsPermissionSettings {
+                panelActionButton(
+                    title: L10n.text("ui.permission_mode"),
+                    subtitle: selectedPermissionMode.title,
+                    systemImage: selectedPermissionMode.systemImage,
+                    tokens: tokens
+                ) {
+                    page = .permissions
+                }
             }
             panelActionButton(
                 title: L10n.text("ui.shortcut_phrase"),
@@ -559,6 +576,56 @@ struct AddContentPanel: View {
         }
     }
 
+    private func permissionList(tokens: ThemeTokens) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 7) {
+                ForEach(permissionModes) { mode in
+                    Button {
+                        onPermissionMode(mode)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 11) {
+                            Image(systemName: mode.systemImage)
+                                .font(themeStore.uiFont(.callout, weight: .semibold))
+                                .foregroundStyle(tokens.accent)
+                                .frame(width: 38, height: 38)
+                                .background(
+                                    tokens.selectionFill,
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                )
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mode.title)
+                                    .font(themeStore.uiFont(.callout, weight: .semibold))
+                                    .foregroundStyle(tokens.primaryText)
+                                Text(mode.detail)
+                                    .font(themeStore.uiFont(.caption))
+                                    .foregroundStyle(tokens.secondaryText)
+                                    .lineLimit(2)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            if selectedPermissionMode == mode {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(tokens.accent)
+                            }
+                        }
+                        .padding(10)
+                        .background(
+                            tokens.elevatedSurface,
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
+                    .accessibilityHint(mode.detail)
+                }
+            }
+        }
+        .frame(maxHeight: 330)
+        .scrollIndicators(.hidden)
+    }
+
     private func shortcutList(tokens: ThemeTokens) -> some View {
         ScrollView {
             LazyVStack(spacing: 7) {
@@ -686,6 +753,7 @@ struct AddContentPanel: View {
         case .root: return L10n.text("ui.add_content")
         case .plugins: return L10n.text("ui.plugin")
         case .skills: return L10n.text("ui.select_skill")
+        case .permissions: return L10n.text("ui.permission_mode")
         case .shortcuts: return L10n.text("ui.shortcut_phrase")
         }
     }
@@ -695,8 +763,13 @@ struct AddContentPanel: View {
         case .root: return L10n.text("ui.add_context_for_the_next_message")
         case .plugins: return L10n.text("ui.reference_the_installed_codex_plug_in_on_mac")
         case .skills: return L10n.text("ui.selected_and_sent_as_structured_capabilities")
+        case .permissions: return selectedPermissionMode.detail
         case .shortcuts: return L10n.text("ui.click_to_insert_input_box")
         }
+    }
+
+    private var rootPanelHeight: CGFloat {
+        showsPermissionSettings ? 456 : 390
     }
 
     private static let shortcuts = [

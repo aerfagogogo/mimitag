@@ -3,6 +3,63 @@ import XCTest
 
 @MainActor
 extension ConversationDataFlowTests {
+    func testLegacyClaudeSnapshotDeduplicatesConfirmedLocalUserEcho() {
+        let localID = UUID()
+        let local = ConversationMessage(
+            id: localID,
+            stableID: "client-confirmed",
+            clientMessageID: "client-confirmed",
+            role: .user,
+            content: "如何",
+            createdAt: Date(timeIntervalSince1970: 100),
+            sendStatus: .confirmed
+        )
+        let history = ConversationMessage(
+            stableID: "appserver:turn_0:user_0_100",
+            turnID: "turn_0",
+            itemID: "user_0_100",
+            role: .user,
+            content: "如何",
+            createdAt: Date(timeIntervalSince1970: 102),
+            sendStatus: .confirmed
+        )
+
+        let result = ConversationTimelineReducer().rebase(
+            snapshot: [history],
+            current: [local]
+        )
+
+        XCTAssertEqual(result.messages.count, 1)
+        XCTAssertEqual(result.messages.first?.id, localID)
+        XCTAssertEqual(result.messages.first?.stableID, history.stableID)
+        XCTAssertEqual(result.messages.first?.clientMessageID, "client-confirmed")
+    }
+
+    func testLegacyClaudeFallbackDoesNotMergeConfirmedHistoryWithoutLocalClientID() {
+        let local = ConversationMessage(
+            role: .user,
+            content: "重复发送",
+            createdAt: Date(timeIntervalSince1970: 100),
+            sendStatus: .confirmed
+        )
+        let history = ConversationMessage(
+            stableID: "appserver:turn_1:user_1_101",
+            turnID: "turn_1",
+            itemID: "user_1_101",
+            role: .user,
+            content: "重复发送",
+            createdAt: Date(timeIntervalSince1970: 101),
+            sendStatus: .confirmed
+        )
+
+        let result = ConversationTimelineReducer().rebase(
+            snapshot: [history],
+            current: [local]
+        )
+
+        XCTAssertEqual(result.messages.count, 2)
+    }
+
     func testTargetThreadSnapshotRebaseKeepsLivePlanAtFirstSeenSlot() {
         let store = ConversationStore()
         let sessionID = "019f7454-64e2-7f70-8208-21291af45ea6"
@@ -169,10 +226,16 @@ extension ConversationDataFlowTests {
         )
 
         let runningItems = ConversationTimelineItemBuilder.items(from: [reasoning, command, final])
-        guard case .processGroup(let runningGroup) = runningItems.first else {
+        guard case .workGroup(let runningWorkGroup) = runningItems.first,
+              case .processGroup(let runningGroup) = runningWorkGroup.entries.first else {
             return XCTFail("相邻 reasoning/command 应组成过程组")
         }
-        XCTAssertEqual(runningGroup.status, .running, "显式 inProgress 不能被 final 提前标记完成")
+        XCTAssertEqual(runningGroup.status, .running, "内层过程组继续反映显式 turn lifecycle")
+        XCTAssertEqual(
+            runningWorkGroup.status,
+            .running,
+            "final 开始 streaming 时显式 inProgress 仍应保持外层展开，等待 completed lifecycle 再收口"
+        )
 
         let completedMessages = [reasoning, command, final].map { message -> ConversationMessage in
             var next = message
@@ -180,10 +243,27 @@ extension ConversationDataFlowTests {
             return next
         }
         let completedItems = ConversationTimelineItemBuilder.items(from: completedMessages)
-        guard case .processGroup(let completedGroup) = completedItems.first else {
+        guard case .workGroup(let completedWorkGroup) = completedItems.first,
+              case .processGroup(let completedGroup) = completedWorkGroup.entries.first else {
             return XCTFail("完成后仍应保留同一个过程组")
         }
         XCTAssertEqual(completedGroup.status, .completed)
+        XCTAssertEqual(completedWorkGroup.status, .completed)
+
+        let legacyMessages = [reasoning, command, final].map { message -> ConversationMessage in
+            var next = message
+            next.turnLifecycle = nil
+            return next
+        }
+        let legacyItems = ConversationTimelineItemBuilder.items(from: legacyMessages)
+        guard case .workGroup(let legacyWorkGroup) = legacyItems.first else {
+            return XCTFail("旧 runtime 输入仍应保留外层工作组")
+        }
+        XCTAssertEqual(
+            legacyWorkGroup.status,
+            .completed,
+            "缺少 lifecycle 的旧 runtime 仍应由 final 兜底完成，不能永久停在运行态"
+        )
     }
 
     func testOrderingConflictFallsBackToFirstSeenSlotsInsteadOfTimestamps() {
@@ -226,5 +306,87 @@ extension ConversationDataFlowTests {
 
         XCTAssertTrue(result.hadOrderingCycle)
         XCTAssertEqual(result.messages.map(\.content), ["快照 A", "本地计划", "快照 B"])
+    }
+
+    func testPartialSnapshotMovesInjectedUserAheadOfLaterLiveReplies() {
+        let turnID = "turn-guidance-order"
+        let clientMessageID = "client-guidance-order"
+        let anchor = ConversationMessage(
+            stableID: "anchor",
+            turnID: turnID,
+            itemID: "anchor",
+            role: .assistant,
+            kind: .commentary,
+            content: "先运行测试。",
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let firstReply = ConversationMessage(
+            stableID: "reply-1",
+            turnID: turnID,
+            itemID: "reply-1",
+            role: .assistant,
+            kind: .message,
+            content: "还在修改和回归。",
+            createdAt: Date(timeIntervalSince1970: 30)
+        )
+        let secondReply = ConversationMessage(
+            stableID: "reply-2",
+            turnID: turnID,
+            itemID: "reply-2",
+            role: .assistant,
+            kind: .message,
+            content: "又发现一个代次交叉。",
+            createdAt: Date(timeIntervalSince1970: 40)
+        )
+        let localGuidance = ConversationMessage(
+            stableID: clientMessageID,
+            clientMessageID: clientMessageID,
+            role: .user,
+            content: "还在修改是么",
+            createdAt: Date(timeIntervalSince1970: 20),
+            sendStatus: .sent,
+            userDelivery: .guided
+        )
+
+        // 省流历史可能先确认中途 steer 用户消息，但暂时不带其后的实时回复。
+        // 即使当前列表已经错误地把本地回显放在尾部，用户消息也必须按真实发送时间
+        // 回到后续回复之前，不能继续显示成“Agent 先回答、用户后提问”。
+        let partialSnapshot = [
+            ConversationMessage(
+                stableID: "anchor",
+                turnID: turnID,
+                itemID: "anchor",
+                role: .assistant,
+                kind: .commentary,
+                content: "先运行测试。",
+                createdAt: Date(timeIntervalSince1970: 10),
+                timelineOrdinal: 0,
+                isTimestampFallback: true
+            ),
+            ConversationMessage(
+                stableID: "server-guidance",
+                clientMessageID: clientMessageID,
+                turnID: turnID,
+                itemID: "guidance",
+                role: .user,
+                content: "还在修改是么",
+                createdAt: Date(timeIntervalSince1970: 10.001),
+                sendStatus: .confirmed,
+                timelineOrdinal: 1,
+                userDelivery: .injected,
+                isTimestampFallback: true
+            )
+        ]
+
+        let result = ConversationTimelineReducer().rebase(
+            snapshot: partialSnapshot,
+            current: [anchor, firstReply, secondReply, localGuidance]
+        )
+
+        XCTAssertFalse(result.hadOrderingCycle)
+        XCTAssertEqual(
+            result.messages.map(\.content),
+            ["先运行测试。", "还在修改是么", "还在修改和回归。", "又发现一个代次交叉。"]
+        )
     }
 }

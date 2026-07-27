@@ -4,6 +4,9 @@ struct ConversationLayout: Equatable {
     // 560pt 以下的实际可用宽度无法稳定容纳带文字标签的主操作行。即使系统仍报
     // regular size class（某些 iPad 极窄分屏），也必须使用紧凑指标。
     static let compactComposerMaximumWidth: CGFloat = 560
+    // 紧凑工具栏不再依靠 ViewThatFits 同时构造两棵完整控件树。达到这个宽度后
+    // 才显示模型标题；更窄时仍通过 accessibilityValue 提供完整模型信息。
+    static let compactComposerModelTitleMinimumWidth: CGFloat = 380
 
     let horizontalInset: CGFloat
     let messageSideSpacer: CGFloat
@@ -18,7 +21,7 @@ struct ConversationLayout: Equatable {
     let emptyStateMaxWidth: CGFloat
 
     var messageRowInsets: EdgeInsets {
-        EdgeInsets(top: 8, leading: horizontalInset, bottom: 8, trailing: horizontalInset)
+        EdgeInsets(top: 10, leading: horizontalInset, bottom: 10, trailing: horizontalInset)
     }
 
     static func usesCompactComposerMetrics(
@@ -29,6 +32,13 @@ struct ConversationLayout: Equatable {
             return true
         }
         return availableWidth.map { $0 < compactComposerMaximumWidth } ?? false
+    }
+
+    static func compactComposerShowsModelTitle(availableWidth: CGFloat?) -> Bool {
+        guard let availableWidth else {
+            return false
+        }
+        return availableWidth >= compactComposerModelTitleMinimumWidth
     }
 
     init(
@@ -59,7 +69,7 @@ struct ConversationLayout: Equatable {
         composerTopPadding = isCompactWidth ? 10 : 12
         // safeAreaInset 已经负责系统手势区；这里只保留卡片与安全区之间的轻量呼吸感，
         // 避免两层底距叠加后让输入卡看起来悬得过高。
-        composerBottomPadding = isCompactWidth ? 8 : 10
+        composerBottomPadding = isCompactWidth ? 0 : 8
 
         // 气泡宽度按实际容器收缩，保留左右身份感，同时避免 iPhone/mini 竖屏横向溢出。
         let rowAvailableWidth = max(240, visibleContainerWidth - horizontalInset * 2 - messageSideSpacer)

@@ -61,6 +61,8 @@ private struct ConversationTimelineCacheKey: Equatable {
     let renderFingerprint: ConversationMessageRenderFingerprint
     let turnPayload: CodexAppServerTurnPayload?
     let activityPayload: ConversationActivityPayload?
+    let timelineOrdinal: Int64?
+    let turnLifecycle: ConversationTurnLifecycle?
     let isTimestampFallback: Bool
 
     init(message: ConversationMessage) {
@@ -78,6 +80,11 @@ private struct ConversationTimelineCacheKey: Equatable {
         self.renderFingerprint = message.renderFingerprint
         self.turnPayload = message.turnPayload
         self.activityPayload = message.activityPayload
+        // lifecycle 会直接改变外层组的运行/终态和默认展开状态，必须使缓存失效。
+        self.turnLifecycle = message.turnLifecycle
+        // Builder 信任 canonical timeline 的输入顺序；ordinal 本身不在这里排序，
+        // 但 reducer 修正序位时它是消息投影的一部分，补齐可避免缓存保留过期快照。
+        self.timelineOrdinal = message.timelineOrdinal
         self.isTimestampFallback = message.isTimestampFallback
     }
 }

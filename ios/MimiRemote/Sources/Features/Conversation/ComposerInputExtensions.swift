@@ -17,7 +17,8 @@ struct ComposerToolbarControlLabel: View {
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
-        let foreground = isSelected ? tokens.primaryActionForeground : (tint ?? tokens.accent)
+        // 品牌紫只表达选中/运行状态；普通输入控件保持中性，降低底部工具区的视觉噪声。
+        let foreground = isSelected ? tokens.primaryActionForeground : (tint ?? tokens.primaryText)
 
         HStack(spacing: 6) {
             Image(systemName: systemImage)
@@ -39,18 +40,19 @@ struct ComposerToolbarControlLabel: View {
         .frame(height: 44)
         .padding(.horizontal, title == nil ? 0 : 12)
         .frame(minWidth: 44)
-        .background(
-            isSelected ? tokens.accent : tokens.surface,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
+        .background {
+            RoundedRectangle(cornerRadius: title == nil ? 22 : 12, style: .continuous)
+                .fill(isSelected ? tokens.accent : Color.clear)
+                .padding(4)
+        }
         .modifier(
             ComposerFlatControlSurface(
                 tokens: tokens,
-                cornerRadius: 12,
+                cornerRadius: title == nil ? 22 : 12,
                 isEmphasized: isSelected
             )
         )
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: title == nil ? 22 : 12, style: .continuous))
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -58,6 +60,76 @@ struct ComposerToolbarControlLabel: View {
 
 // ComposerView 的输入、语音和附件动作集中在这里；状态仍由主 View 持有，避免新增镜像 ViewModel。
 extension ComposerView {
+    var runningControls: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+        return HStack(spacing: 8) {
+            if canInterruptSelectedSession {
+                Button {
+                    sessionStore.sendCtrlC()
+                } label: {
+                    Label("Ctrl-C", systemImage: "stop.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(.secondary)
+                .accessibilityLabel(L10n.text("ui.send_ctrl_c"))
+            }
+
+            Button {
+                Task { await sessionStore.stopSelectedSession() }
+            } label: {
+                Label(L10n.text("ui.stop"), systemImage: "xmark.circle")
+            }
+            .buttonStyle(.bordered)
+            .tint(tokens.primaryAction)
+            .accessibilityLabel(L10n.text("ui.stop_current_session"))
+        }
+        .controlSize(.small)
+        .font(themeStore.uiFont(.caption, weight: .medium))
+        // 运行控制悬浮在消息流之上。没有底衬时，最后一条消息右下角的
+        // “已送达，等待回复”会透过按钮间隙与之叠字，因此沿用输入面板同款材质，
+        // 让它像语音胶囊一样成为一枚独立的悬浮控件，遮住身后的消息。
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .background {
+            composerFloatingControlBackground(tokens: tokens)
+        }
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(composerCardBorderColor(tokens), lineWidth: composerCardBorderWidth)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
+    }
+
+    // 悬浮控件底衬：与 composerContainerBackground 同源，只是换成胶囊轮廓，
+    // 保证运行控制与底部输入面板属于同一层材质语言。
+    @ViewBuilder
+    func composerFloatingControlBackground(tokens: ThemeTokens) -> some View {
+        let shape = Capsule(style: .continuous)
+        if reduceTransparency {
+            shape.fill(tokens.elevatedSurface)
+        } else {
+            shape
+                .fill(.thinMaterial)
+                .overlay {
+                    shape.fill(tokens.elevatedSurface.opacity(colorScheme == .light ? 0.58 : 0.46))
+                }
+        }
+    }
+
+    // 宽屏设备直接平铺发送上下文。横向滚动只为大字号与极窄分屏兜底，
+    // 不改变“无需先点开开关即可操作”的默认形态。
+    var composerContextControlsRow: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                skillPickerButton
+                permissionMenu
+            }
+        }
+        .scrollIndicators(.hidden)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     var selectedVoiceInputProvider: VoiceInputProvider {
         VoiceInputProvider(rawValue: voiceInputProviderRawValue) ?? .codex
     }
@@ -263,9 +335,12 @@ extension ComposerView {
 
     @ViewBuilder
     var pendingApprovalAction: some View {
-        if !sessionStore.isSelectedSessionObserving, let approval = sessionStore.selectedSession?.pendingApproval {
+        if !sessionStore.isSelectedSessionObserving,
+           let session = sessionStore.selectedSession,
+           let approval = session.pendingApproval {
             PendingApprovalActionCard(
                 approval: approval,
+                runtimePresentation: SessionRuntimePresentation(session: session),
                 isSendingDecision: sessionStore.isApprovalDecisionPending(approval),
                 onDecision: { decision in
                     sessionStore.decideApproval(approval, decision: decision)
@@ -276,30 +351,35 @@ extension ComposerView {
 
     @ViewBuilder
     var pendingUserInputAction: some View {
-        if !sessionStore.isSelectedSessionObserving, let request = sessionStore.selectedSession?.pendingUserInput {
+        if !sessionStore.isSelectedSessionObserving,
+           let session = sessionStore.selectedSession,
+           let request = session.pendingUserInput {
+            let runtimePresentation = SessionRuntimePresentation(session: session)
             if isPhoneComposer {
                 PendingUserInputResumeButton(
                     request: request,
+                    runtimePresentation: runtimePresentation,
                     isSubmitting: sessionStore.isUserInputResponsePending(request),
                     action: { presentPendingUserInputSheet(request) }
                 )
             } else {
                 PendingUserInputActionCard(
                     request: request,
+                    runtimePresentation: runtimePresentation,
                     isSubmitting: sessionStore.isUserInputResponsePending(request),
-                    draft: $pendingUserInputFormState.draft,
+                    draft: pendingUserInputDraftBinding,
                     onSubmit: { answers in
                         sessionStore.respondToUserInput(request, answers: answers)
                     }
                 )
-                .id(PendingUserInputPresentation(request: request).id)
+                .id(PendingUserInputPresentation.id(for: request))
             }
         }
     }
 
     var pendingUserInputSelectionIdentity: PendingUserInputSelectionIdentity {
         let requestPresentationID = sessionStore.selectedSession?.pendingUserInput.map {
-            PendingUserInputPresentation(request: $0).id
+            PendingUserInputPresentation.id(for: $0)
         }
         return PendingUserInputSelectionIdentity(
             sessionID: sessionStore.selectedSessionID,
@@ -307,13 +387,34 @@ extension ComposerView {
         )
     }
 
+    var pendingUserInputDraftBinding: Binding<PendingUserInputDraft> {
+        Binding(
+            get: { pendingUserInputFormState.draft },
+            set: { draft in
+                pendingUserInputFormState.draft = draft
+                persistPendingUserInputFormState()
+            }
+        )
+    }
+
+    func restorePendingUserInputFormStateFromCache() {
+        pendingUserInputFormState = sessionStore.pendingUserInputFormStateCache
+    }
+
+    func persistPendingUserInputFormState() {
+        sessionStore.pendingUserInputFormStateCache = pendingUserInputFormState
+    }
+
     func synchronizePendingUserInputPresentation(
         previous: PendingUserInputSelectionIdentity?,
         current: PendingUserInputSelectionIdentity
     ) {
-        if previous?.sessionID != current.sessionID {
+        if pendingUserInputFormState.resetIfSessionChanged(
+            from: previous?.sessionID,
+            to: current.sessionID
+        ) {
             // 会话切换意味着表单语境已经变化，旧选择不能带入另一条 thread。
-            pendingUserInputFormState.resetForSessionChange()
+            persistPendingUserInputFormState()
             presentedPendingUserInput = nil
         }
 
@@ -326,19 +427,33 @@ extension ComposerView {
             return
         }
 
-        let presentation = PendingUserInputPresentation(request: request)
+        guard let session = sessionStore.selectedSession else {
+            return
+        }
+        let presentation = PendingUserInputPresentation(
+            request: request,
+            runtimePresentation: SessionRuntimePresentation(session: session)
+        )
         guard presentation.id == current.requestPresentationID else {
             return
         }
         pendingUserInputFormState.activate(presentation.id)
+        persistPendingUserInputFormState()
         if isPhoneComposer {
             presentedPendingUserInput = presentation
         }
     }
 
     func presentPendingUserInputSheet(_ request: AgentUserInputRequest) {
-        let presentation = PendingUserInputPresentation(request: request)
+        guard let session = sessionStore.selectedSession else {
+            return
+        }
+        let presentation = PendingUserInputPresentation(
+            request: request,
+            runtimePresentation: SessionRuntimePresentation(session: session)
+        )
         pendingUserInputFormState.activate(presentation.id)
+        persistPendingUserInputFormState()
         presentedPendingUserInput = presentation
     }
 
@@ -374,23 +489,25 @@ extension ComposerView {
             .frame(height: 44)
             .padding(.horizontal, showLabels ? 18 : 0)
             .frame(minWidth: 44)
-            .background(
-                enabled ? tokens.primaryAction : tokens.surface,
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
+            .background {
+                RoundedRectangle(cornerRadius: showLabels ? 12 : 22, style: .continuous)
+                    .fill(enabled ? tokens.primaryAction : Color.clear)
+                    .padding(4)
+            }
             .modifier(
                 ComposerFlatControlSurface(
                     tokens: tokens,
-                    cornerRadius: 12,
+                    cornerRadius: showLabels ? 12 : 22,
                     isEmphasized: enabled
                 )
             )
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: showLabels ? 12 : 22, style: .continuous))
         }
         .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
         .keyboardShortcut(.return, modifiers: .command)
         .disabled(!enabled)
         .accessibilityLabel(isGoalMode ? L10n.text("ui.send_target_task") : (composerState.voiceDraftNeedsReview ? L10n.text("ui.confirm_sending_voice_draft") : L10n.text("ui.send")))
+        .accessibilityIdentifier("composer.send")
     }
 
     var permissionTitle: String {

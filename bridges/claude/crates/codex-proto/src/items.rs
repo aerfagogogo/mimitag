@@ -66,7 +66,12 @@ pub struct TextElement {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
-    UserMessage { id: String, content: Vec<UserInput> },
+    UserMessage {
+        id: String,
+        content: Vec<UserInput>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+    },
 
     #[serde(rename_all = "camelCase")]
     HookPrompt {
@@ -411,6 +416,22 @@ mod tests {
         assert!(v.get("reasoningEffort").is_none(), "None Option must skip");
         let parsed: ThreadItem = serde_json::from_value(v).unwrap();
         assert_eq!(parsed, item);
+    }
+
+    #[test]
+    fn user_message_round_trips_client_id() {
+        let item = ThreadItem::UserMessage {
+            id: "user-1".into(),
+            content: vec![UserInput::Text {
+                text: "继续".into(),
+                text_elements: Vec::new(),
+            }],
+            client_id: Some("client-1".into()),
+        };
+
+        let value = serde_json::to_value(&item).unwrap();
+        assert_eq!(value["clientId"], "client-1");
+        assert_eq!(serde_json::from_value::<ThreadItem>(value).unwrap(), item);
     }
 
     #[test]

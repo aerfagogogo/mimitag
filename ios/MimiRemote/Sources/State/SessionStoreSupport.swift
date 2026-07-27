@@ -62,6 +62,7 @@ struct HistoryFirstPageFetchFailure: LocalizedError {
 }
 
 struct HistoryPolicyFailure: Equatable {
+    let reason: String?
     let retryAfterNanoseconds: UInt64?
     let retryAfterSeconds: Int?
 }
@@ -106,10 +107,15 @@ struct HistoryLoadJob {
     let token: Int
     let sessionSignature: HistoryLoadSignature
     let loadMode: HistoryMessagesPage.LoadMode
+    /// 恢复代次要求 bypass 时，不能加入一个更早创建的 reuseRecent job。
+    let cachePolicy: HistoryFirstPageCachePolicy
+    /// 非 nil 表示此 job 属于一次明确的前台/网络恢复代次。
+    let recoveryGeneration: UInt64?
     let allowPolicyRetry: Bool
     let task: Task<HistoryFirstPageResult, Error>
     var requiresForegroundReporting: Bool
     var foregroundSuccessStatusMessage: String?
+    var foregroundSelectionLease: SessionSelectionLease?
 }
 
 struct ProjectSessionListSnapshot: Equatable {
@@ -394,6 +400,8 @@ protocol SessionReminderScheduling {
 }
 
 struct UserNotificationSessionReminderScheduler: SessionReminderScheduling {
+    static let runtimeNotificationIDPrefix = "mimi.sessionRuntime."
+
     let center: UNUserNotificationCenter
 
     init(center: UNUserNotificationCenter = .current()) {
@@ -507,7 +515,11 @@ struct UserNotificationSessionReminderScheduler: SessionReminderScheduling {
     }
 
     static func runtimeNotificationID(for id: String) -> String {
-        "mimi.sessionRuntime.\(id)"
+        "\(runtimeNotificationIDPrefix)\(id)"
+    }
+
+    static func isRuntimeNotificationID(_ identifier: String) -> Bool {
+        identifier.hasPrefix(runtimeNotificationIDPrefix)
     }
 }
 
@@ -819,6 +831,29 @@ struct HistoryLoadProgress: Equatable {
 struct SessionRestoreSnapshot: Codable, Equatable {
     let endpoint: String
     let session: AgentSession
+}
+
+/// 跨 await 的前台选择凭证。除了代次，还同时校验项目和会话，避免同一 ID
+/// 在工作区切换、身份替换等场景下被误认为仍是当前选择。
+struct SessionSelectionLease: Equatable {
+    let generation: UInt64
+    let projectID: String?
+    let sessionID: SessionID?
+}
+
+struct SessionSelectionCommit: Equatable {
+    enum Reason: Equatable {
+        case userOpen
+        case notification
+        case restoration
+        case identityReplacement(previousID: SessionID)
+        case invalidation
+    }
+
+    let sequence: UInt64
+    let projectID: String?
+    let sessionID: SessionID?
+    let reason: Reason
 }
 
 enum WorkbenchRootPage: String, Codable, Equatable {

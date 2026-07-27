@@ -10,12 +10,13 @@
 
 - `SwiftUI + Observation`：原生菜单栏、Dashboard、配对、诊断和设置界面。
 - `SMAppService`：注册 App bundle 内的 LaunchAgent；登录后同时启动菜单栏 App 和 `agentd`。
-- 内嵌 Go `agentd`：构建阶段按目标架构编译并使用稳定 identifier 签名。
+- 内嵌 Go `agentd` 与 Rust `alleycat-claude-bridge`：构建阶段按目标架构编译并使用稳定 identifier 分别签名。
 - 单一 `HostStore`：统一管理服务 owner、迁移、就绪、错误和监控状态。
 - 小型 Client：命令执行、健康检查、ServiceManagement、Homebrew 和日志相互独立，便于测试与复用。
-- 轻量监控：每 10 秒只请求 localhost `/healthz`，每 60 秒才执行一次完整状态刷新。
+- 自动网络：优先使用 Tailscale；未安装或不可用时启用同一局域网直连，并返回真实 LAN 地址而不是本机回环地址。
+- 轻量监控：每 10 秒只请求 localhost `/healthz`，每 5 分钟才执行一次完整状态刷新。
 
-App 不读取或展示长期 Token。设置和配对只调用 `agentd ... --qr-only --json`，界面只接收短期配对票据。
+App 不读取或展示长期 Token。设置和配对只调用 `agentd ... --qr-only --json`，界面只接收短期配对票据。Claude Runtime 仍默认关闭；当前菜单栏设置尚未提供 Runtime 开关，启用时必须在私有备份后用 JSON 解析器只修改配置中的 `claude` 字段。
 
 ## 实现
 
@@ -57,7 +58,7 @@ bash macos/MimiRemoteMac/Scripts/install-local.sh "/Applications/Mimi Remote Mac
 
 ### 正式安装包
 
-正式 tag 的 Release workflow 会生成 `Mimi-Remote-Mac.dmg` 和 SHA-256 文件。维护者可在没有发布凭据时先验证完整的 universal 构建链路：
+正式 tag 的 Release workflow 会生成 `Mimi-Remote-Mac.dmg` 和 SHA-256 文件。DMG 内的 App 同时包含 universal `agentd` 和 `alleycat-claude-bridge`。维护者可在没有发布凭据时先验证完整的 universal 构建链路：
 
 ```bash
 bash scripts/build-macos-installer.sh \
@@ -71,10 +72,17 @@ bash scripts/check-macos-installer.sh dist-macos/Mimi-Remote-Mac.dmg
 
 ### 首次启动
 
-1. 如果没有配置，选择允许访问的代码根目录，App 调用安全的 `agentd setup --qr-only` 完成设置。
+1. 如果没有配置，选择项目扫描的代码根目录。App 将项目扫描范围设为该目录、文件浏览范围设为当前用户 Home，再调用安全的 `agentd setup --qr-only` 完成设置；有 Tailscale 时优先使用，否则自动启用局域网。
 2. 如果检测到 `homebrew.mxcl.mimi-remote`，App 先保持旧服务运行并显示“等待接管”。
 3. 用户确认后，App 先跑 Doctor，再停止 Homebrew service、注册内嵌 LaunchAgent 并等待 readyz。
 4. 任一步失败都会尝试重新启动 Homebrew service；设置页也保留手动恢复入口。
+
+### Claude Runtime
+
+- 正式 Mac App 使用与 `agentd` 同目录的随包 bridge，不要求用户单独安装 Rust 或运行 `cargo install`。
+- `agentd` 监督一个 resident bridge；每个 Claude thread 对应一个 Claude Code headless 进程。移动端重连使用稳定 session 和事件 cursor，不重复提交 `turn/start`。
+- Claude 仍需用户在 Mac 安装并登录 Claude Code，并显式设置 `claude.enabled=true`。保持 `CLAUDE_BRIDGE_BYPASS_PERMISSIONS=false`。
+- 当前不支持 `goal`、`archive`、`fork`、APNs 后台 push 和跨设备云同步。完整边界见 [Claude bridge 架构](../../docs/claude-bridge-architecture.md)。
 
 ### 运行数据
 
@@ -86,6 +94,7 @@ bash scripts/check-macos-installer.sh dist-macos/Mimi-Remote-Mac.dmg
 ## 风险与优化
 
 - macOS 文件权限与签名身份绑定。开发版保持固定 Team 和 helper identifier，但首次从 Homebrew 二进制迁移仍可能需要重新确认文件访问权限。
+- 文件浏览范围默认覆盖当前用户 Home，配对 Token 是远程读取文件的安全边界；项目扫描仍只遍历用户选择的代码目录。
 - `SMAppService` 的 `.requiresApproval` 不能由 App 绕过；界面会引导用户打开“系统设置 → 通用 → 登录项与扩展”。
 - App 被移走或删除前，应先在 App 内恢复 Homebrew 或停止服务，避免系统仍保留指向旧 bundle 的注册记录。
 - 首个 DMG 不带自动更新；升级时下载新 DMG 覆盖 App，`agentd` 配置和配对数据保存在用户 Application Support 中，不随 App 覆盖。

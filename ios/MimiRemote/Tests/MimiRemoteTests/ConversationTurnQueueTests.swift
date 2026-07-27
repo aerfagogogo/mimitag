@@ -1613,6 +1613,77 @@ extension ConversationDataFlowTests {
         })
     }
 
+    func testClaudeApprovalRequestUsesSharedRuntimeNotificationPipeline() async throws {
+        let project = makeProject(id: "proj_claude_approval_notice")
+        let running = makeSession(
+            id: "sess_claude_approval_notice",
+            projectID: project.id,
+            title: "Claude 运行中",
+            status: "running",
+            source: "claude",
+            runtimeProvider: "claude"
+        )
+        let appStore = AppStore()
+        appStore.token = "test-token"
+        let scheduler = FakeSessionReminderScheduler()
+        var sockets: [MockWebSocketClient] = []
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            sessionReminderScheduler: scheduler,
+            clientFactory: {
+                MockSessionStoreClient(projects: [project], sessions: [running])
+            },
+            webSocketFactory: {
+                let socket = MockWebSocketClient()
+                sockets.append(socket)
+                return socket
+            }
+        )
+
+        await store.refreshAll(autoAttach: false)
+        store.takeOverSession(running)
+        await store.selectSession(running)
+        let socket = try XCTUnwrap(sockets.first)
+        socket.emitStatus(.connected)
+        try await waitForWebSocketStatus(.connected, store: store)
+
+        socket.emitEvent(.approvalRequest(
+            AgentApprovalRequest(
+                id: "claude-tool-approval",
+                title: "运行 Bash",
+                body: "go test ./...",
+                kind: "command",
+                risk: "medium"
+            ),
+            AgentEventMetadata(
+                seq: 22,
+                sessionID: running.id,
+                turnID: "claude-turn-approval",
+                itemID: "claude-tool-approval",
+                messageID: nil,
+                clientMessageID: nil,
+                revision: nil,
+                createdAt: nil
+            )
+        ))
+        for _ in 0..<80 where scheduler.runtimeNotifications.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(scheduler.runtimeNotifications, [
+            SessionRuntimeNotification(
+                id: "approval:\(running.id):claude-tool-approval",
+                sessionID: running.id,
+                title: "等待审批",
+                body: "\(running.title)：运行 Bash",
+                kind: .approval
+            )
+        ])
+        XCTAssertEqual(store.selectedSession?.pendingApproval?.id, "claude-tool-approval")
+    }
+
     func testApprovalRequestSurvivesLateRunningStatusAndRefresh() async throws {
         let project = makeProject(id: "proj_approval_race")
         let running = makeSession(id: "sess_approval_race", projectID: project.id, title: "运行中", status: "running", source: "codex")
