@@ -1520,6 +1520,31 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(userInput.questions.first(where: { $0.id == "environment" })?.options.map(\.label), ["staging", "production"])
     }
 
+    func testEmptyMcpElicitationFormProjectsToExplicitApproval() {
+        let request = CodexAppServerServerRequest(
+            id: .string("computer-use-consent"),
+            method: "mcpServer/elicitation/request",
+            params: .object([
+                "threadId": .string("thread-1"),
+                "serverName": .string("node_repl"),
+                "mode": .string("form"),
+                "message": .string(#"Allow Computer Use to use "Photos"?"#),
+                "requestedSchema": .object([
+                    "type": .string("object"),
+                    "properties": .object([:])
+                ])
+            ])
+        )
+
+        var projector = CodexAppServerEventProjector()
+        guard case .approvalRequest(let approval, let metadata) = projector.project(request) else {
+            return XCTFail("expected empty MCP form to become an approval request")
+        }
+        XCTAssertEqual(metadata.sessionID, "thread-1")
+        XCTAssertEqual(approval.kind, "mcp_elicitation")
+        XCTAssertEqual(approval.body, #"Allow Computer Use to use "Photos"?"#)
+    }
+
     func testMcpURLelicitationProjectsToExplicitApproval() {
         let request = CodexAppServerServerRequest(
             id: .int(17),
@@ -1573,6 +1598,32 @@ final class CodexAppServerProtocolTests: XCTestCase {
         let declined = await runtime.userInputResponse(for: form, answers: [:])
         XCTAssertEqual(declined["action"]?.stringValue, "decline")
         XCTAssertEqual(declined["content"], .null)
+
+        let emptyConsent = CodexAppServerServerRequest(
+            id: .string("computer-use-consent"),
+            method: "mcpServer/elicitation/request",
+            params: .object([
+                "threadId": .string("thread-1"),
+                "serverName": .string("node_repl"),
+                "mode": .string("form"),
+                "message": .string(#"Allow Computer Use to use "Photos"?"#),
+                "requestedSchema": .object([
+                    "type": .string("object"),
+                    "properties": .object([:])
+                ])
+            ])
+        )
+        let emptyConsentIsApproval = await runtime.isApprovalLikeServerRequest(emptyConsent)
+        let emptyConsentIsUserInput = await runtime.isUserInputServerRequest(emptyConsent)
+        XCTAssertTrue(emptyConsentIsApproval)
+        XCTAssertFalse(emptyConsentIsUserInput)
+        let consentAccepted = await runtime.approvalResponse(
+            method: emptyConsent.method,
+            params: emptyConsent.params?.objectValue ?? [:],
+            decision: "accept"
+        )
+        XCTAssertEqual(consentAccepted["action"]?.stringValue, "accept")
+        XCTAssertEqual(consentAccepted["content"]?.objectValue?.isEmpty, true)
 
         let url = CodexAppServerServerRequest(
             id: .int(7),

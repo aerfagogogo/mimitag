@@ -33,8 +33,16 @@ extension SessionStore {
         if !isReconnectAttempt {
             cancelWebSocketReconnect(resetAttempts: true)
         }
-        if connectedSessionID == session.id, case .connected = webSocketStatus {
-            return
+        if connectedSessionID == session.id, webSocket != nil {
+            switch webSocketStatus {
+            case .connecting, .connected:
+                // REST 刷新、前台恢复和用户操作可能同时要求挂接同一会话。
+                // 连接握手尚未完成时复用正在建立的 socket，避免拆掉它再创建一条，
+                // 否则弱网下会表现为“连接中 -> 重新加载 -> 再连接”。
+                return
+            case .failed, .disconnected, .terminated:
+                break
+            }
         }
         disconnectWebSocket(cancelReconnect: !isReconnectAttempt)
 
@@ -154,6 +162,9 @@ extension SessionStore {
         syncRuntimeActivity(with: session)
         runtimeEventFlushTasks[session.id]?.cancel()
         runtimeEventFlushTasks[session.id] = nil
+        // 底层 onStatus 会通过 MainActor Task 回传；先同步发布 connecting，消除
+        // socket 已存在但 Store 仍显示 disconnected 的一拍空窗，防止并发挂接误建第二条连接。
+        setWebSocketStatus(.connecting)
         socket.connect(sessionID: session.id, replayBufferedEvents: replayBufferedEvents)
     }
 

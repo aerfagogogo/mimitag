@@ -1570,9 +1570,13 @@ extension CodexAppServerSessionRuntime {
         if lower.contains("approval") {
             return true
         }
-        // URL 型 MCP elicitation 没有表单内容，复用明确的批准/拒绝交互更安全。
-        return request.method == "mcpServer/elicitation/request"
-            && request.params?.objectValue?["mode"]?.stringValue == "url"
+        guard request.method == "mcpServer/elicitation/request" else {
+            return false
+        }
+        // URL 型和空 object 表单都没有需要填写的内容。Computer Use 使用空表单询问
+        // 是否允许操作某个 App；这类请求必须显示批准/拒绝，不能降级成“其他”文本框。
+        return request.params?.objectValue?["mode"]?.stringValue == "url"
+            || isEmptyMcpElicitationForm(request)
     }
 
     func isUserInputServerRequest(_ request: CodexAppServerServerRequest) -> Bool {
@@ -1583,6 +1587,18 @@ extension CodexAppServerSessionRuntime {
         // 用户没有填入时回 decline，不会误接受无法理解的 MCP 请求。
         return request.method == "mcpServer/elicitation/request"
             && request.params?.objectValue?["mode"]?.stringValue != "url"
+            && !isEmptyMcpElicitationForm(request)
+    }
+
+    func isEmptyMcpElicitationForm(_ request: CodexAppServerServerRequest) -> Bool {
+        guard let params = request.params?.objectValue,
+              params["mode"]?.stringValue != "url",
+              let schema = params["requestedSchema"]?.objectValue,
+              schema["type"]?.stringValue == "object",
+              let properties = schema["properties"]?.objectValue else {
+            return false
+        }
+        return properties.isEmpty
     }
 
     func uniqueStrings(_ values: [String]) -> [String] {
@@ -1607,9 +1623,15 @@ extension CodexAppServerSessionRuntime {
             ])
         }
         if method == "mcpServer/elicitation/request" {
+            let schema = params["requestedSchema"]?.objectValue
+            let isEmptyForm = params["mode"]?.stringValue != "url"
+                && schema?["type"]?.stringValue == "object"
+                && schema?["properties"]?.objectValue?.isEmpty == true
             return .object([
                 "action": .string(decision == "accept" ? "accept" : decision == "cancel" ? "cancel" : "decline"),
-                "content": .null,
+                // MCP form elicitation accepts an object matching requestedSchema.
+                // Computer Use sends an empty object schema for simple consent prompts.
+                "content": decision == "accept" && isEmptyForm ? .object([:]) : .null,
                 "_meta": .null
             ])
         }

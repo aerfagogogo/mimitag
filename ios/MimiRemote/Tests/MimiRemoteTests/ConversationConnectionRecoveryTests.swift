@@ -767,6 +767,11 @@ extension ConversationDataFlowTests {
 
         let resumeTask = Task { await store.resumeFromForeground() }
         await client.waitForBlockedSessionListRefresh()
+        XCTAssertEqual(
+            socket.connectedSessionIDs,
+            [first.id, first.id],
+            "回前台应在 REST 列表刷新完成前立即恢复实时连接"
+        )
         await store.selectSession(second)
         client.releaseBlockedSessionListRefresh()
         await resumeTask.value
@@ -774,6 +779,44 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(store.selectedSessionID, second.id)
         XCTAssertEqual(store.connectedSessionID, second.id)
         XCTAssertEqual(socket.connectedSessionIDs.last, second.id)
+    }
+
+    func testRepeatedAttachWhileConnectingReusesExistingSocket() {
+        let project = makeProject(id: "proj_connecting_socket_reuse")
+        let running = makeSession(
+            id: "thread_connecting_socket_reuse",
+            projectID: project.id,
+            title: "连接中",
+            status: "running",
+            source: "codex"
+        )
+        let appStore = AppStore()
+        appStore.token = "test-token"
+        var sockets: [MockWebSocketClient] = []
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: {
+                MockSessionStoreClient(projects: [project], sessions: [running])
+            },
+            webSocketFactory: {
+                let socket = MockWebSocketClient()
+                sockets.append(socket)
+                return socket
+            }
+        )
+        store.upsert(running)
+        store.selectedProjectID = project.id
+        store.selectedSessionID = running.id
+
+        store.connectWebSocket(running)
+        store.connectWebSocket(running, isReconnectAttempt: true, replayBufferedEvents: false)
+
+        XCTAssertEqual(sockets.count, 1)
+        XCTAssertEqual(sockets[0].connectedSessionIDs, [running.id])
+        XCTAssertEqual(sockets[0].disconnectCallCount, 0)
+        XCTAssertEqual(store.webSocketStatus, .connecting)
     }
 
     func testBootstrapHonorsThreadListRetryAfterBeforeRetrying() async {

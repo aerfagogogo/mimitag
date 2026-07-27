@@ -736,7 +736,8 @@ struct CodexAppServerEventProjector {
             return .userInputRequest(request, metadata)
         }
         if request.method == "mcpServer/elicitation/request",
-           params["mode"]?.stringValue != "url" {
+           params["mode"]?.stringValue != "url",
+           !isEmptyMcpElicitationForm(params: params) {
             let metadata = makeMetadata(from: params)
             guard let userInput = mcpElicitationUserInputRequest(
                 from: params,
@@ -1508,7 +1509,25 @@ struct CodexAppServerEventProjector {
     ) -> Bool {
         let lower = method.lowercased()
         return lower.contains("approval")
-            || (method == "mcpServer/elicitation/request" && params["mode"]?.stringValue == "url")
+            || (
+                method == "mcpServer/elicitation/request"
+                    && (
+                        params["mode"]?.stringValue == "url"
+                            || isEmptyMcpElicitationForm(params: params)
+                    )
+            )
+    }
+
+    private func isEmptyMcpElicitationForm(
+        params: [String: CodexAppServerJSONValue]
+    ) -> Bool {
+        guard params["mode"]?.stringValue != "url",
+              let schema = params["requestedSchema"]?.objectValue,
+              schema["type"]?.stringValue == "object",
+              let properties = schema["properties"]?.objectValue else {
+            return false
+        }
+        return properties.isEmpty
     }
 
     private func approvalKind(method: String) -> String {

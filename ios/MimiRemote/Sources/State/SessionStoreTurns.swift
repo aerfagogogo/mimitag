@@ -1696,6 +1696,20 @@ extension SessionStore {
             setStatusMessage(L10n.text("ui.the_network_is_unavailable_and_will_automatically_reconnect_682354fa"))
             return
         }
+        // 先用内存中的会话立即恢复实时事件流，再让 REST 在后台语义上校准项目、列表和历史。
+        // 旧顺序会先等待 refreshUntilLoaded（最坏 10 秒），期间 UI 只能停在加载/断线状态。
+        // 状态级回放足以补齐后台期间完成的事件，也不会把旧 delta 逐条重新直播。
+        if isSelectionLeaseCurrent(foregroundSelectionLease),
+           let reconnectSessionID,
+           selectedSessionID == reconnectSessionID,
+           let session = sessionsByID[reconnectSessionID] {
+            connectWebSocket(
+                session,
+                isReconnectAttempt: true,
+                replayBufferedEvents: false,
+                allowNonRunning: true
+            )
+        }
         // 回前台同样可能赶上 gateway 还没恢复；做几秒的高频重试，避免单次失败后又卡到下次切换。
         // 正常情况下首次 refreshAll 就成功（errorMessage 为 nil），立即返回，不会有额外开销。
         await refreshUntilLoaded(maxWait: 10, autoAttach: false)
@@ -1719,6 +1733,7 @@ extension SessionStore {
         }
         // 完整历史已成功落地时只回放状态；若历史读取失败，必须 full replay，不能再次静默
         // 丢掉 detached 期间的 assistant/process 内容。
+        // 如果抢先恢复未能建立 socket（例如本地会话在这期间才补齐），仍用刷新后的会话兜底。
         connectWebSocket(
             session,
             isReconnectAttempt: true,
