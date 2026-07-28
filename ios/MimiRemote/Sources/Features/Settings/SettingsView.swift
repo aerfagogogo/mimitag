@@ -1117,7 +1117,7 @@ private struct CombinedUsageSettingsCard: View {
     private func usageRings(diameter: CGFloat, lineWidth: CGFloat) -> some View {
         CombinedUsageRingsGraphic(
             items: usageItems,
-            expectedRingCount: includesClaude ? 3 : 1,
+            expectedRingCount: 3,
             diameter: diameter,
             lineWidth: lineWidth
         )
@@ -1151,154 +1151,12 @@ private struct CombinedUsageSettingsCard: View {
     /// 产品只需要 Codex 的长窗口，以及 Claude 的长、短两个窗口。
     /// 服务端的 primary/secondary 槽位并不稳定，因此按真实时长选择而不是写死槽位。
     private var usageItems: [CombinedUsageItem] {
-        var items: [CombinedUsageItem] = []
-
-        if let codexWindow = preferredLongWindow(in: codexDisplay) {
-            items.append(
-                CombinedUsageItem(
-                    runtimeProvider: "codex",
-                    providerName: providerName(for: codexDisplay, fallback: "Codex"),
-                    window: codexWindow,
-                    tint: codexTint
-                )
-            )
-        }
-
-        if includesClaude, let claudeLongWindow = preferredLongWindow(in: claudeDisplay) {
-            items.append(
-                CombinedUsageItem(
-                    runtimeProvider: "claude",
-                    providerName: providerName(for: claudeDisplay, fallback: "Claude"),
-                    window: claudeLongWindow,
-                    tint: claudeLongTint
-                )
-            )
-
-            if let claudeShortWindow = preferredShortWindow(
-                in: claudeDisplay,
-                excluding: claudeLongWindow
-            ) {
-                items.append(
-                    CombinedUsageItem(
-                        runtimeProvider: "claude",
-                        providerName: providerName(for: claudeDisplay, fallback: "Claude"),
-                        window: claudeShortWindow,
-                        tint: claudeShortTint
-                    )
-                )
-            }
-        }
-
-        return Array(items.prefix(3))
-    }
-
-    private var codexTint: Color {
-        .pink
-    }
-
-    private var claudeLongTint: Color {
-        .cyan
-    }
-
-    private var claudeShortTint: Color {
-        themeStore.tokens(for: colorScheme).accent
-    }
-
-    private func preferredLongWindow(
-        in display: CodexUsageWindowsDisplay
-    ) -> CodexUsageWindowDisplay? {
-        let dayScaleWindows = display.windows.filter(\.isDayScaleWindow)
-        return dayScaleWindows.max(by: durationAscending)
-            ?? display.windows.max(by: durationAscending)
-    }
-
-    private func preferredShortWindow(
-        in display: CodexUsageWindowsDisplay,
-        excluding longWindow: CodexUsageWindowDisplay
-    ) -> CodexUsageWindowDisplay? {
-        display.windows
-            .filter { $0.id != longWindow.id }
-            .min(by: durationAscending)
-    }
-
-    private func durationAscending(
-        _ lhs: CodexUsageWindowDisplay,
-        _ rhs: CodexUsageWindowDisplay
-    ) -> Bool {
-        (lhs.durationMinutes ?? -1) < (rhs.durationMinutes ?? -1)
-    }
-
-    /// 服务端名称可能是全小写；已知产品名在展示层统一品牌大小写，不改变协议值。
-    private func providerName(
-        for display: CodexUsageWindowsDisplay,
-        fallback: String
-    ) -> String {
-        switch display.displayName.lowercased() {
-        case "codex":
-            return "Codex"
-        case "claude":
-            return "Claude"
-        default:
-            return display.displayName.isEmpty ? fallback : display.displayName
-        }
-    }
-}
-
-private struct CombinedUsageItem: Identifiable {
-    let runtimeProvider: String
-    let providerName: String
-    let window: CodexUsageWindowDisplay
-    let tint: Color
-
-    var id: String {
-        "\(runtimeProvider):\(window.id)"
-    }
-}
-
-private struct CombinedUsageRingsGraphic: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
-    @EnvironmentObject private var themeStore: ThemeStore
-
-    let items: [CombinedUsageItem]
-    let expectedRingCount: Int
-    let diameter: CGFloat
-    let lineWidth: CGFloat
-
-    var body: some View {
-        let tokens = themeStore.tokens(for: colorScheme)
-        let ringCount = min(max(expectedRingCount, items.count), 3)
-        let ringStep = (lineWidth + 8) * 2
-
-        ZStack {
-            ForEach(0..<ringCount, id: \.self) { index in
-                let ringDiameter = diameter - CGFloat(index) * ringStep
-
-                ZStack {
-                    Circle()
-                        .stroke(tokens.tertiaryText.opacity(0.18), lineWidth: lineWidth)
-
-                    if index < items.count,
-                       let progress = items[index].window.remainingProgress {
-                        Circle()
-                            .trim(from: 0, to: progress)
-                            .stroke(
-                                items[index].tint,
-                                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-                            )
-                            .rotationEffect(.degrees(-90))
-                            .animation(
-                                reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 1),
-                                value: progress
-                            )
-                    }
-                }
-                .frame(width: ringDiameter, height: ringDiameter)
-            }
-
-        }
-        .frame(width: diameter, height: diameter)
-        .accessibilityHidden(true)
+        CombinedUsageItem.make(
+            codexDisplay: codexDisplay,
+            claudeDisplay: claudeDisplay,
+            includesClaude: includesClaude,
+            claudeShortTint: themeStore.tokens(for: colorScheme).accent
+        )
     }
 }
 

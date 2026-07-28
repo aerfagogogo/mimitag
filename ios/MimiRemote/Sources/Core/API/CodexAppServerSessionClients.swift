@@ -408,7 +408,7 @@ final class MultiRuntimeSessionAPIClient: SessionStoreAPIClient {
         let codexPage = try await page(runtime: bundle.codex, projectID: projectID, cursor: decoded.codex, limit: limit, buffer: decoded.codexBuffer, consistency: consistency)
         let claudeAvailable = try await bundle.codex.channelAvailable(runtimeProvider: "claude")
         let claudePage = claudeAvailable
-            ? try await page(runtime: bundle.claude, projectID: projectID, cursor: decoded.claude, limit: limit, buffer: decoded.claudeBuffer, consistency: consistency)
+            ? await optionalPage(runtime: bundle.claude, projectID: projectID, cursor: decoded.claude, limit: limit, buffer: decoded.claudeBuffer, consistency: consistency)
             : preservedPage(cursor: decoded.claude, buffer: decoded.claudeBuffer)
         return mergedPage(codex: codexPage, claude: claudePage, limit: limit)
     }
@@ -422,7 +422,7 @@ final class MultiRuntimeSessionAPIClient: SessionStoreAPIClient {
         let codexPage = try await page(runtime: bundle.codex, workspace: workspace, cursor: decoded.codex, limit: limit, buffer: decoded.codexBuffer, consistency: consistency)
         let claudeAvailable = try await bundle.codex.channelAvailable(runtimeProvider: "claude")
         let claudePage = claudeAvailable
-            ? try await page(runtime: bundle.claude, workspace: workspace, cursor: decoded.claude, limit: limit, buffer: decoded.claudeBuffer, consistency: consistency)
+            ? await optionalPage(runtime: bundle.claude, workspace: workspace, cursor: decoded.claude, limit: limit, buffer: decoded.claudeBuffer, consistency: consistency)
             : preservedPage(cursor: decoded.claude, buffer: decoded.claudeBuffer)
         return mergedPage(codex: codexPage, claude: claudePage, limit: limit)
     }
@@ -552,6 +552,41 @@ final class MultiRuntimeSessionAPIClient: SessionStoreAPIClient {
         }
         let page = try await runtime.sessionsPage(workspace: workspace, cursor: cursor, limit: limit, consistency: consistency)
         return RuntimePage(sessions: page.sessions, nextCursor: page.hasMore ? page.nextCursor : nil)
+    }
+
+    private func optionalPage(runtime: CodexAppServerSessionRuntime, projectID: String?, cursor: String?, limit: Int?, buffer: [AgentSession], consistency: SessionListConsistency) async -> RuntimePage {
+        do {
+            return try await page(
+                runtime: runtime,
+                projectID: projectID,
+                cursor: cursor,
+                limit: limit,
+                buffer: buffer,
+                consistency: consistency
+            )
+        } catch {
+            // Claude 是可选通道。它未登录、bridge 尚未就绪或 WebSocket 暂时断开时，
+            // 不能把已经成功读取的 Codex 会话一起丢掉；下一次完整刷新会再次探测。
+            print("Optional runtime thread/list unavailable: \(error.localizedDescription)")
+            return preservedPage(cursor: cursor, buffer: buffer)
+        }
+    }
+
+    private func optionalPage(runtime: CodexAppServerSessionRuntime, workspace: AgentWorkspace, cursor: String?, limit: Int?, buffer: [AgentSession], consistency: SessionListConsistency) async -> RuntimePage {
+        do {
+            return try await page(
+                runtime: runtime,
+                workspace: workspace,
+                cursor: cursor,
+                limit: limit,
+                buffer: buffer,
+                consistency: consistency
+            )
+        } catch {
+            // 与 projectID 入口保持同一降级语义，避免工作区详情被可选通道拖成整页失败。
+            print("Optional runtime workspace thread/list unavailable: \(error.localizedDescription)")
+            return preservedPage(cursor: cursor, buffer: buffer)
+        }
     }
 
     private func preservedPage(cursor: String?, buffer: [AgentSession]) -> RuntimePage {

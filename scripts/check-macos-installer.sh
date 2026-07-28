@@ -68,10 +68,11 @@ hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MOUNT_DIR" "$DMG_PATH"
 MOUNTED=1
 APP_PATH="$MOUNT_DIR/Mimi Remote Mac.app"
 AGENT_PATH="$APP_PATH/Contents/Resources/agentd"
+BRIDGE_PATH="$APP_PATH/Contents/Resources/alleycat-claude-bridge"
 LAUNCH_AGENT_PATH="$APP_PATH/Contents/Library/LaunchAgents/com.gaixianggeng.mimi.mac.agentd.plist"
 
-if [[ ! -d "$APP_PATH" || ! -x "$AGENT_PATH" || ! -f "$LAUNCH_AGENT_PATH" ]]; then
-  echo "Mac 安装包校验失败：DMG 缺少 App、agentd 或 LaunchAgent。" >&2
+if [[ ! -d "$APP_PATH" || ! -x "$AGENT_PATH" || ! -x "$BRIDGE_PATH" || ! -f "$LAUNCH_AGENT_PATH" ]]; then
+  echo "Mac 安装包校验失败：DMG 缺少 App、agentd、Claude bridge 或 LaunchAgent。" >&2
   exit 1
 fi
 if [[ ! -L "$MOUNT_DIR/Applications" || "$(readlink "$MOUNT_DIR/Applications")" != "/Applications" ]]; then
@@ -80,10 +81,12 @@ if [[ ! -L "$MOUNT_DIR/Applications" || "$(readlink "$MOUNT_DIR/Applications")" 
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+codesign --verify --strict --verbose=2 "$BRIDGE_PATH"
 plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
 "$AGENT_PATH" version >/dev/null
+"$BRIDGE_PATH" --version >/dev/null
 
-for binary_path in "$APP_PATH/Contents/MacOS/Mimi Remote Mac" "$AGENT_PATH"; do
+for binary_path in "$APP_PATH/Contents/MacOS/Mimi Remote Mac" "$AGENT_PATH" "$BRIDGE_PATH"; do
   binary_archs="$(lipo -archs "$binary_path")"
   for required_arch in arm64 x86_64; do
     if [[ " $binary_archs " != *" $required_arch "* ]]; then
@@ -95,20 +98,25 @@ done
 
 app_signing_details="$(codesign -d --verbose=4 "$APP_PATH" 2>&1)"
 agent_signing_details="$(codesign -d --verbose=4 "$AGENT_PATH" 2>&1)"
+bridge_signing_details="$(codesign -d --verbose=4 "$BRIDGE_PATH" 2>&1)"
 # 先完整读取 codesign 输出，避免 pipefail 将 awk 提前退出造成的 SIGPIPE 误判为签名失败。
 app_identifier="$(awk -F= '$1 == "Identifier" { print $2; exit }' <<<"$app_signing_details")"
 agent_identifier="$(awk -F= '$1 == "Identifier" { print $2; exit }' <<<"$agent_signing_details")"
+bridge_identifier="$(awk -F= '$1 == "Identifier" { print $2; exit }' <<<"$bridge_signing_details")"
 if [[ "$app_identifier" != "com.gaixianggeng.mimi.mac" \
-  || "$agent_identifier" != "com.gaixianggeng.mimi.mac.agentd" ]]; then
-  echo "Mac 安装包校验失败：App 或 agentd 签名 identifier 不稳定。" >&2
+  || "$agent_identifier" != "com.gaixianggeng.mimi.mac.agentd" \
+  || "$bridge_identifier" != "com.gaixianggeng.mimi.mac.claude-bridge" ]]; then
+  echo "Mac 安装包校验失败：App、agentd 或 Claude bridge 签名 identifier 不稳定。" >&2
   exit 1
 fi
 
 if [[ "$REQUIRE_NOTARIZATION" == "1" ]]; then
   codesign --verify --strict --verbose=2 "$DMG_PATH"
   if ! grep -Fq 'Authority=Developer ID Application:' <<<"$app_signing_details" \
-    || ! grep -Eq '^TeamIdentifier=[A-Z0-9]+' <<<"$app_signing_details"; then
-    echo "Mac 安装包校验失败：App 不是有效的 Developer ID Application 签名。" >&2
+    || ! grep -Eq '^TeamIdentifier=[A-Z0-9]+' <<<"$app_signing_details" \
+    || ! grep -Fq 'Authority=Developer ID Application:' <<<"$bridge_signing_details" \
+    || ! grep -Eq '^TeamIdentifier=[A-Z0-9]+' <<<"$bridge_signing_details"; then
+    echo "Mac 安装包校验失败：App 或 Claude bridge 不是有效的 Developer ID Application 签名。" >&2
     exit 1
   fi
   xcrun stapler validate "$DMG_PATH"
@@ -116,4 +124,4 @@ if [[ "$REQUIRE_NOTARIZATION" == "1" ]]; then
   spctl --assess --type execute --verbose=4 "$APP_PATH"
 fi
 
-echo "Mac 安装包校验通过：universal App、agentd、LaunchAgent、拖放入口和签名结构完整。"
+echo "Mac 安装包校验通过：universal App、agentd、Claude bridge、LaunchAgent、拖放入口和签名结构完整。"

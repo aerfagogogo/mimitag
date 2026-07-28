@@ -132,6 +132,7 @@ struct WorkspaceRootView: View {
     let onStartSession: (AgentProject, WorkspaceSessionRuntimeChoice) -> Void
     let onOpenSession: (AgentSession) -> Void
     let embedsNavigationStack: Bool
+    private let currentDate: () -> Date
 
     @State private var selectedWorkspaceID: String?
     @State private var catalogState: CatalogState = .idle
@@ -144,11 +145,13 @@ struct WorkspaceRootView: View {
         onOpenSession: @escaping (AgentSession) -> Void = { _ in },
         embedsNavigationStack: Bool = true,
         appearanceStore: WorkspaceAppearanceStore? = nil,
-        initialWorkspaceID: String? = nil
+        initialWorkspaceID: String? = nil,
+        currentDate: @escaping () -> Date = Date.init
     ) {
         self.onStartSession = onStartSession
         self.onOpenSession = onOpenSession
         self.embedsNavigationStack = embedsNavigationStack
+        self.currentDate = currentDate
         _appearanceStore = StateObject(wrappedValue: appearanceStore ?? WorkspaceAppearanceStore())
         // 正常入口仍由 synchronizeSelection 恢复选择；显式初值只服务于确定性的预览和视觉快照。
         _selectedWorkspaceID = State(initialValue: initialWorkspaceID)
@@ -374,6 +377,7 @@ struct WorkspaceRootView: View {
                                     isGitSummaryLoading: true,
                                     hasRunningSession: false,
                                     lastActivityAt: nil,
+                                    currentDate: currentDate,
                                     isUnavailable: false,
                                     isSelected: false,
                                     allowsCustomization: false,
@@ -395,6 +399,7 @@ struct WorkspaceRootView: View {
                                     isGitSummaryLoading: sessionStore.refreshingWorkspaceGitSummaryPaths.contains(project.path),
                                     hasRunningSession: projectSessions.contains(where: \.isRunning),
                                     lastActivityAt: workspaceActivityDate(projectID: project.id, sessions: projectSessions),
+                                    currentDate: currentDate,
                                     isUnavailable: sessionStore.isWorkspaceUnavailable(project.id),
                                     isSelected: selectedWorkspaceID == project.id,
                                     allowsCustomization: true,
@@ -448,6 +453,7 @@ struct WorkspaceRootView: View {
             sessionLoadState: loadState,
             canLoadMoreSessions: sessionStore.canLoadMoreSessions(projectID: project.id),
             claudeChannelAvailable: sessionStore.hasClaudeRuntimeChannel,
+            currentDate: currentDate,
             onRefreshSessions: {
                 Task {
                     await refreshWorkspaceSessions(projectID: project.id)
@@ -609,7 +615,7 @@ private struct WorkspaceActionPressButtonStyle: ButtonStyle {
     }
 }
 
-private struct WorkspaceLibraryCard: View {
+struct WorkspaceLibraryCard: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -620,6 +626,7 @@ private struct WorkspaceLibraryCard: View {
     let isGitSummaryLoading: Bool
     let hasRunningSession: Bool
     let lastActivityAt: Date?
+    let currentDate: () -> Date
     let isUnavailable: Bool
     let isSelected: Bool
     let allowsCustomization: Bool
@@ -727,8 +734,10 @@ private struct WorkspaceLibraryCard: View {
             Divider()
                 .overlay(tokens.border.opacity(0.56))
 
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                metadataRow(now: context.date)
+            TimelineView(.periodic(from: .now, by: 60)) { _ in
+                // TimelineView 只负责按分钟触发刷新；时间来源可在视觉测试中固定，
+                // 生产环境默认仍由 Date.init 返回当前时刻。
+                metadataRow(now: currentDate())
             }
         }
         .padding(14)
@@ -1062,6 +1071,7 @@ private struct WorkspaceDetailView: View {
     let sessionLoadState: WorkspaceSessionLoadState
     let canLoadMoreSessions: Bool
     let claudeChannelAvailable: Bool
+    let currentDate: () -> Date
     let onRefreshSessions: () -> Void
     let onLoadMoreSessions: () async -> Void
     let onStartSession: (WorkspaceSessionRuntimeChoice) -> Void
@@ -1212,7 +1222,10 @@ private struct WorkspaceDetailView: View {
                     .background(tokens.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             } else {
                 VStack(spacing: 0) {
-                    let firstStaleIndex = WorkspaceSessionAgeBoundary.firstStaleIndex(in: recentSessions)
+                    let firstStaleIndex = WorkspaceSessionAgeBoundary.firstStaleIndex(
+                        in: recentSessions,
+                        now: currentDate()
+                    )
 
                     ForEach(Array(recentSessions.enumerated()), id: \.element.id) { index, session in
                         if index == firstStaleIndex {
@@ -1375,7 +1388,7 @@ private struct WorkspaceDetailView: View {
 
     private func sessionTimeText(for session: AgentSession) -> String {
         guard let date = session.recencyAt ?? session.updatedAt ?? session.createdAt else { return "" }
-        if Calendar.current.isDateInToday(date) {
+        if Calendar.current.isDate(date, inSameDayAs: currentDate()) {
             return Self.sessionTimeFormatter.string(from: date)
         }
         return Self.sessionDateFormatter.string(from: date)

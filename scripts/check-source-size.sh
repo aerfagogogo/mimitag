@@ -15,6 +15,9 @@ exception_reason() {
     ios/MimiRemote/Tests/MimiRemoteTests/ConversationComposerHistoryTests.swift)
       printf '%s' 'Composer 历史交互回归矩阵，后续按输入与历史导航场景拆分'
       ;;
+    ios/MimiRemote/Tests/MimiRemoteTests/ConversationDataFlowTests.swift)
+      printf '%s' '会话数据流回归矩阵，后续按流式事件、审批和附件场景拆分'
+      ;;
     ios/MimiRemote/Tests/MimiRemoteTests/ConversationWorkspaceHistoryTests.swift)
       printf '%s' 'Workspace 历史回归矩阵，后续按目录解析与会话恢复场景拆分'
       ;;
@@ -26,6 +29,9 @@ exception_reason() {
       ;;
     internal/httpapi/appserver_gateway_test.go)
       printf '%s' 'App Server 网关回归矩阵，后续按鉴权、会话和历史消息场景拆分'
+      ;;
+    internal/httpapi/router_test.go)
+      printf '%s' 'HTTP 路由回归矩阵，后续按配对、项目和运行时端点拆分'
       ;;
     ios/MimiRemote/Sources/State/SessionStoreConnection.swift)
       printf '%s' '会话连接、事件归并与本地状态兼容逻辑，后续按连接生命周期和状态职责拆分'

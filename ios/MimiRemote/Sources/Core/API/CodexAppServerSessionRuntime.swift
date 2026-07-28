@@ -215,7 +215,9 @@ actor CodexAppServerSessionRuntime {
         guard runtimeGatewayAvailable(in: config) else {
             throw CodexAppServerSessionRuntimeError.gatewayUnavailable
         }
-        let gatewayURL = try gatewayURL(from: config)
+        // 健康检查与正式 runtime 可能在冷启动时并发。如果二者复用同一个常驻 session，
+        // probe 完成后的 disconnect 会随机拆掉正式连接，表现为所有工作区同时 STREAM 断开。
+        let gatewayURL = try Self.isolatedProbeURL(from: gatewayURL(from: config))
         let probe = CodexAppServerConnection(transport: transportFactory())
         try await probe.connect(url: gatewayURL, token: token)
         await probe.disconnect()
@@ -1010,7 +1012,7 @@ actor CodexAppServerSessionRuntime {
             && !stateDBOnlyScanRequiredCWDs.contains(cwd)
         let sortKey = preferredThreadListSortKey
         do {
-            let result = try await sendRecoveringFromStaleInitialization(
+            let result = try await sendReadOnlyRecoveringConnection(
                 try builder.threadList(
                     cwd: cwd,
                     limit: limit,
@@ -1071,7 +1073,7 @@ actor CodexAppServerSessionRuntime {
         projects: [AgentProject],
         fallbackProject: AgentProject
     ) async throws -> SessionsPage {
-        let result = try await sendRecoveringFromStaleInitialization(
+        let result = try await sendReadOnlyRecoveringConnection(
             try builder.threadList(
                 cwd: cwd,
                 limit: limit,
@@ -1889,6 +1891,21 @@ actor CodexAppServerSessionRuntime {
         }
     }
 
+    static func isolatedProbeURL(from gatewayURL: URL, nonce: UUID = UUID()) throws -> URL {
+        guard var components = URLComponents(url: gatewayURL, resolvingAgainstBaseURL: false) else {
+            throw AgentAPIError.invalidEndpoint
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "session" || $0.name == "last_seen" }
+        let probeSession = "probe-\(nonce.uuidString.replacingOccurrences(of: "-", with: ""))"
+        queryItems.append(URLQueryItem(name: "session", value: probeSession))
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            throw AgentAPIError.invalidEndpoint
+        }
+        return url
+    }
+
     private static func gatewayLastSeenStorageKey(
         endpoint: String,
         gatewaySession: String,
@@ -2108,6 +2125,40 @@ actor CodexAppServerSessionRuntime {
                 }
             }
             await retireCurrentConnectionAfterRecoverableError(firstConnection, error: error)
+            throw error
+        }
+    }
+
+    /// 只读 JSON-RPC 在连接级故障时可以安全地在新连接上重试一次。
+    /// 写请求仍使用 sendRecoveringFromStaleInitialization，避免响应丢失时重复产生副作用。
+    func sendReadOnlyRecoveringConnection(
+        _ request: CodexAppServerRequestSpec,
+        timeout: TimeInterval? = nil
+    ) async throws -> CodexAppServerJSONValue? {
+        let firstConnection = try await ensureConnection()
+        do {
+            return try await firstConnection.send(request, timeout: timeout)
+        } catch {
+            if await recoverConnectionAfterStaleInitialization(firstConnection, error: error) {
+                return try await sendReadOnlyRequestOnceAfterRecovery(request, timeout: timeout)
+            }
+            guard isRecoverableConnectionError(error) else {
+                throw error
+            }
+            await retireCurrentConnectionAfterRecoverableError(firstConnection, error: error)
+            return try await sendReadOnlyRequestOnceAfterRecovery(request, timeout: timeout)
+        }
+    }
+
+    func sendReadOnlyRequestOnceAfterRecovery(
+        _ request: CodexAppServerRequestSpec,
+        timeout: TimeInterval?
+    ) async throws -> CodexAppServerJSONValue? {
+        let recoveredConnection = try await ensureConnection()
+        do {
+            return try await recoveredConnection.send(request, timeout: timeout)
+        } catch {
+            await retireCurrentConnectionAfterRecoverableError(recoveredConnection, error: error)
             throw error
         }
     }

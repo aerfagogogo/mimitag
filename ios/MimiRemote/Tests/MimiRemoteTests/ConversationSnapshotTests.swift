@@ -1166,6 +1166,9 @@ final class ConversationSnapshotTests: SimplifiedChineseSnapshotTestCase {
         .environmentObject(sessionStore)
         .environmentObject(themeStore)
         .environment(\.colorScheme, .light)
+        // 固定尺寸在不同 iOS Runtime 下可能推导出不同 size class；
+        // 这里明确验证 iPad regular 侧栏，避免系统推导差异改变头部结构。
+        .environment(\.horizontalSizeClass, .regular)
         .frame(width: 420, height: 768)
 
         assertSnapshot(

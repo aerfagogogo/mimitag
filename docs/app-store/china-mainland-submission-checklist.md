@@ -17,7 +17,7 @@ KittyLitter 已在中国大陆商店提供，说明“移动端连接用户自�
 - [ ] 当前开发版本同时开放设备端与 Codex 转写；再次提交中国大陆审核前，应根据最新审核反馈决定是否限制为仅设备端，并同步代码、隐私政策、审核备注和截图。
 - [x] 已用当前中国大陆提交代码重拍 iPhone、iPad mini 和 13 英寸 iPad 截图；旧截图中的 ChatGPT 图标、`openai` 路径和旧 `agentd` 界面不复用。
 
-README 当前四张实机图仅保留为研发记录，不进入中国大陆商店素材：
+以下旧 README 实机图已从仓库删除，不进入中国大陆商店素材：
 
 - `iphone-workspace-light-real.png`、`iphone-workspace-dark-real.png`：含第三方品牌图标或产品名称。
 - `ipad-workspace-light-real.png`：含旧品牌图标、Codex/Claude Code 入口和旧显示名称。
@@ -27,8 +27,8 @@ README 当前四张实机图仅保留为研发记录，不进入中国大陆商�
 
 - [ ] 核对 App Store Connect 名称为简体中文 `mimitag`、英文 `mimitag`，与本地元数据和本地化显示名称一致。
 - [ ] 粘贴 `zh-Hans/` 与 `en-US/` 中的新元数据。
-- [ ] 技术支持 URL 更新为 `https://github.com/gaixianggeng/mimi-remote/blob/main/docs/support.md`。
-- [ ] 隐私政策 URL 更新为 `https://github.com/gaixianggeng/mimi-remote/blob/main/docs/privacy-policy.md`。
+- [ ] 技术支持 URL 更新为 `https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/support.md`。
+- [ ] 隐私政策 URL 更新为 `https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/privacy-policy.md`。
 - [ ] 首个中国大陆版本不填写 Marketing URL。
 - [ ] 上传 `artifacts/app-store/china-mainland-screenshots/upload-ready/` 中的 3 张 iPhone 与 3 张 13 英寸 iPad 截图；当前推荐顺序为工作区、会话、会话列表。
 - [ ] 选择包含本次品牌与语音修改的新构建，构建号必须为 `100055` 或更高。

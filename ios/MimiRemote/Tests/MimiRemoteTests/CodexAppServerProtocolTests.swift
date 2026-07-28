@@ -504,6 +504,33 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertNotEqual(try sessionKey(codex), key)
     }
 
+    func testGatewayProbeUsesIsolatedEphemeralSession() throws {
+        let suiteName = "CodexAppServerProtocolTests.gatewayProbe.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let regular = try CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8787",
+            sessionID: "",
+            runtimeProvider: "claude",
+            defaults: defaults
+        )
+        let nonce = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let probe = try CodexAppServerSessionRuntime.isolatedProbeURL(from: regular, nonce: nonce)
+        let regularItems = URLComponents(url: regular, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let probeItems = URLComponents(url: probe, resolvingAgainstBaseURL: false)?.queryItems ?? []
+
+        XCTAssertNotEqual(
+            regularItems.first(where: { $0.name == "session" })?.value,
+            probeItems.first(where: { $0.name == "session" })?.value
+        )
+        XCTAssertEqual(
+            probeItems.first(where: { $0.name == "session" })?.value,
+            "probe-AAAAAAAABBBBCCCCDDDDEEEEEEEEEEEE"
+        )
+        XCTAssertEqual(probeItems.first(where: { $0.name == "runtime" })?.value, "claude")
+        XCTAssertNil(probeItems.first(where: { $0.name == "last_seen" }))
+    }
+
     func testClaudeGatewayURLCarriesClientProcessedCursor() throws {
         let suiteName = "CodexAppServerProtocolTests.gatewayCursor.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

@@ -180,3 +180,152 @@ struct StatusPill: View {
         }
     }
 }
+
+/// 设置页和工作台侧栏共用的额度窗口模型。集中选择规则后，两个入口不会因为
+/// 服务端 primary / secondary 槽位变化而展示不同的三个圆环。
+struct CombinedUsageItem: Identifiable {
+    let runtimeProvider: String
+    let providerName: String
+    let window: CodexUsageWindowDisplay
+    let tint: Color
+
+    var id: String {
+        "\(runtimeProvider):\(window.id)"
+    }
+
+    static func make(
+        codexDisplay: CodexUsageWindowsDisplay,
+        claudeDisplay: CodexUsageWindowsDisplay,
+        includesClaude: Bool,
+        codexTint: Color = .pink,
+        claudeLongTint: Color = .cyan,
+        claudeShortTint: Color
+    ) -> [CombinedUsageItem] {
+        var items: [CombinedUsageItem] = []
+
+        if let codexWindow = preferredLongWindow(in: codexDisplay) {
+            items.append(
+                CombinedUsageItem(
+                    runtimeProvider: "codex",
+                    providerName: providerName(for: codexDisplay, fallback: "Codex"),
+                    window: codexWindow,
+                    tint: codexTint
+                )
+            )
+        }
+
+        if includesClaude, let claudeLongWindow = preferredLongWindow(in: claudeDisplay) {
+            items.append(
+                CombinedUsageItem(
+                    runtimeProvider: "claude",
+                    providerName: providerName(for: claudeDisplay, fallback: "Claude"),
+                    window: claudeLongWindow,
+                    tint: claudeLongTint
+                )
+            )
+
+            if let claudeShortWindow = preferredShortWindow(
+                in: claudeDisplay,
+                excluding: claudeLongWindow
+            ) {
+                items.append(
+                    CombinedUsageItem(
+                        runtimeProvider: "claude",
+                        providerName: providerName(for: claudeDisplay, fallback: "Claude"),
+                        window: claudeShortWindow,
+                        tint: claudeShortTint
+                    )
+                )
+            }
+        }
+
+        return Array(items.prefix(3))
+    }
+
+    private static func preferredLongWindow(
+        in display: CodexUsageWindowsDisplay
+    ) -> CodexUsageWindowDisplay? {
+        let dayScaleWindows = display.windows.filter(\.isDayScaleWindow)
+        return dayScaleWindows.max(by: durationAscending)
+            ?? display.windows.max(by: durationAscending)
+    }
+
+    private static func preferredShortWindow(
+        in display: CodexUsageWindowsDisplay,
+        excluding longWindow: CodexUsageWindowDisplay
+    ) -> CodexUsageWindowDisplay? {
+        display.windows
+            .filter { $0.id != longWindow.id }
+            .min(by: durationAscending)
+    }
+
+    private static func durationAscending(
+        _ lhs: CodexUsageWindowDisplay,
+        _ rhs: CodexUsageWindowDisplay
+    ) -> Bool {
+        (lhs.durationMinutes ?? -1) < (rhs.durationMinutes ?? -1)
+    }
+
+    /// 已知产品名统一品牌大小写；协议原值仍保留在 runtimeProvider 中。
+    private static func providerName(
+        for display: CodexUsageWindowsDisplay,
+        fallback: String
+    ) -> String {
+        switch display.displayName.lowercased() {
+        case "codex":
+            return "Codex"
+        case "claude":
+            return "Claude"
+        default:
+            return display.displayName.isEmpty ? fallback : display.displayName
+        }
+    }
+}
+
+/// 同一套三环图形通过尺寸参数同时服务设置卡片和侧栏紧凑入口。
+struct CombinedUsageRingsGraphic: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var themeStore: ThemeStore
+
+    let items: [CombinedUsageItem]
+    let expectedRingCount: Int
+    let diameter: CGFloat
+    let lineWidth: CGFloat
+    var ringSpacing: CGFloat = 8
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+        let ringCount = min(max(expectedRingCount, items.count), 3)
+        let ringStep = (lineWidth + ringSpacing) * 2
+
+        ZStack {
+            ForEach(0..<ringCount, id: \.self) { index in
+                let ringDiameter = diameter - CGFloat(index) * ringStep
+
+                ZStack {
+                    Circle()
+                        .stroke(tokens.tertiaryText.opacity(0.18), lineWidth: lineWidth)
+
+                    if index < items.count,
+                       let progress = items[index].window.remainingProgress {
+                        Circle()
+                            .trim(from: 0, to: progress)
+                            .stroke(
+                                items[index].tint,
+                                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                            )
+                            .rotationEffect(.degrees(-90))
+                            .animation(
+                                reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 1),
+                                value: progress
+                            )
+                    }
+                }
+                .frame(width: ringDiameter, height: ringDiameter)
+            }
+        }
+        .frame(width: diameter, height: diameter)
+        .accessibilityHidden(true)
+    }
+}

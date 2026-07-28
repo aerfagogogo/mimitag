@@ -67,7 +67,7 @@ for document in required_documents:
 
 link_source = Path("ios/MimiRemote/Sources/Core/AppExternalLinks.swift").read_text(encoding="utf-8")
 for relative_path in ("privacy-policy.md", "terms-of-use.md", "support.md"):
-    expected = f"https://github.com/gaixianggeng/mimi-remote/blob/main/docs/{relative_path}"
+    expected = f"https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/{relative_path}"
     if expected not in link_source:
         errors.append(f"AppExternalLinks.swift is missing stable URL: {expected}")
 

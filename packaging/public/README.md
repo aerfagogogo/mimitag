@@ -4,7 +4,7 @@
 
 Mimi Remote Agent 是运行在用户自己 Mac 或 Linux 开发机上的 Go 服务。它通过受控的 HTTP/WebSocket 接口，把移动端请求转发到本机 Codex app-server，同时负责鉴权、目录授权、协议白名单、服务诊断和资源边界。
 
-这个公开发布镜像包含后端、Mac 菜单栏宿主、安装脚本和发布配置。Mimi Remote 的 iPhone / iPad 客户端源码位于完整开源仓库 [gaixianggeng/codex-ipad-agent](https://github.com/gaixianggeng/codex-ipad-agent)。
+这个仓库只保留 Mimi Remote 的历史后端与 Mac 发布记录。完整源码和所有新版本统一发布在 [gaixianggeng/codex-ipad-agent](https://github.com/gaixianggeng/codex-ipad-agent)。
 
 本项目是独立开发的第三方工具，不隶属于 OpenAI，也不代表 OpenAI 官方产品。
 
@@ -31,7 +31,7 @@ iPhone / iPad App
 
 ### macOS App（推荐）
 
-从 [GitHub Releases](https://github.com/gaixianggeng/mimi-remote/releases/latest) 下载 `Mimi-Remote-Mac.dmg`，打开后把 **Mimi Remote Mac** 拖到 Applications。安装包同时支持 Apple Silicon 和 Intel，App 内已经包含 `agentd` 和兼容的 `alleycat-claude-bridge`，不要求用户安装 Go、Rust 或 Xcode。
+从 [GitHub Releases](https://github.com/gaixianggeng/codex-ipad-agent/releases/latest) 下载 `Mimi-Remote-Mac.dmg`，打开后把 **Mimi Remote Mac** 拖到 Applications。安装包同时支持 Apple Silicon 和 Intel，App 内已经包含 `agentd` 和兼容的 `alleycat-claude-bridge`，不要求用户安装 Go、Rust 或 Xcode。
 
 首次打开 App 后，在菜单栏完成设置或接管已有 Homebrew 服务；检测到 Tailscale 时优先使用，否则自动启用同一局域网连接。现有配置、Token 和配对关系会保留。安装包使用 Developer ID 签名并经过 Apple Notarization，仍建议下载后核对同一 Release 中的 `Mimi-Remote-Mac.dmg.sha256`。
 
@@ -40,7 +40,7 @@ iPhone / iPad App
 让 `$skill-installer` 安装以下 GitHub 路径，即可由 Codex 按仓库维护的安全流程执行安装、升级、诊断和回滚：
 
 ```text
-https://github.com/gaixianggeng/mimi-remote/tree/main/packaging/skill/install-mimi-remote
+https://github.com/gaixianggeng/codex-ipad-agent/tree/main/packaging/skill/install-mimi-remote
 ```
 
 每个 Release 同时提供 `install-mimi-remote.zip` 与对应 SHA-256 文件，作为可固定版本、可校验的独立发布包。Skill 只包含操作指引，不包含应用二进制、Token 或用户配置。

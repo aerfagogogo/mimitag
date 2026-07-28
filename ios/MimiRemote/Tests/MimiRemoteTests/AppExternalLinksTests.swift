@@ -15,7 +15,7 @@ final class AppExternalLinksTests: XCTestCase {
         for link in links {
             XCTAssertEqual(link.scheme, "https")
             XCTAssertEqual(link.host, "github.com")
-            XCTAssertTrue(link.path.hasPrefix("/gaixianggeng/mimi-remote"))
+            XCTAssertTrue(link.path.hasPrefix("/gaixianggeng/codex-ipad-agent"))
             XCTAssertNil(link.query)
             XCTAssertNil(link.fragment)
         }
@@ -28,7 +28,7 @@ final class AppExternalLinksTests: XCTestCase {
     }
 
     func testMacInstallerLinksRemainVersionIndependent() {
-        XCTAssertEqual(AppExternalLinks.macRelease.path, "/gaixianggeng/mimi-remote/releases/latest")
+        XCTAssertEqual(AppExternalLinks.macRelease.path, "/gaixianggeng/codex-ipad-agent/releases/latest")
         XCTAssertTrue(AppExternalLinks.macInstaller.path.hasSuffix("/releases/latest/download/Mimi-Remote-Mac.dmg"))
     }
 

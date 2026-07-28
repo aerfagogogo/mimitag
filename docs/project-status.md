@@ -8,7 +8,7 @@
 
 Mimi Remote 的目标是让 iPhone / iPad 安全连接用户自己的 Mac，在明确授权的工作区内远程使用 Codex。项目保持单机优先：不建设云端账号系统，不把代码、Codex 凭证或完整会话托管到开发者服务器。
 
-完整源码仓库 `gaixianggeng/codex-ipad-agent` 公开 iOS App、Go 后端、Claude bridge、测试和文档。自有 iOS / Go 代码使用 GNU GPLv3 并附 App Store / Google Play 分发例外；从 Alleycat 收窄导入的 `bridges/claude` 保留 GPLv3-only 和上游归属。`gaixianggeng/mimi-remote` 继续作为后端公开发布镜像，保留现有 Go Release 和 Homebrew 下载 URL；后端通过固定白名单脚本从完整仓库单向导出，避免手工维护第二份源码。
+完整源码与新版本统一由 `gaixianggeng/codex-ipad-agent` 公开和发布，包括 iOS App、Mac App、Go 后端、Claude bridge、测试、文档、DMG、Go/Linux 归档、Homebrew Formula 和安装 Skill。自有 iOS / Go 代码使用 GNU GPLv3 并附 App Store / Google Play 分发例外；从 Alleycat 收窄导入的 `bridges/claude` 保留 GPLv3-only 和上游归属。`gaixianggeng/mimi-remote` 只保留历史 Release 和旧下载链接，不再维护第二份新版本源码。
 
 ## 方案
 

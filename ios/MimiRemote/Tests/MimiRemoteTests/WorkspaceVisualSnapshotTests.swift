@@ -154,7 +154,9 @@ final class WorkspaceVisualSnapshotTests: XCTestCase {
             onStartSession: { _, _ in },
             onOpenSession: { _ in },
             appearanceStore: appearanceStore,
-            initialWorkspaceID: projects[0].id
+            initialWorkspaceID: projects[0].id,
+            // 固定“当前时间”后，相对分组和右侧时刻不会随测试运行日期漂移。
+            currentDate: { referenceDate }
         )
         .environmentObject(appStore)
         .environmentObject(sessionStore)

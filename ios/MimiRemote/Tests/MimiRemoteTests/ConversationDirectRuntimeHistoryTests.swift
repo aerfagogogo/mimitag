@@ -784,6 +784,52 @@ extension ConversationDataFlowTests {
         socket.disconnect()
     }
 
+    func testThreadListReadReconnectsAndRetriesAfterSendFailure() async throws {
+        let project = AgentProject(id: "proj_list_retry", name: "List Retry", path: "/tmp/list-retry")
+        let transportPool = FakeCodexAppServerTransportPool()
+        let runtime = CodexAppServerSessionRuntime(
+            endpoint: "http://127.0.0.1:8787",
+            token: "outer-token",
+            transportFactory: { transportPool.make() },
+            configProvider: { makeDirectAppServerConfig(project: project) }
+        )
+
+        let firstPageTask = Task {
+            try await runtime.sessionsPage(projectID: project.id, cursor: nil, limit: 20)
+        }
+        let firstTransport = try await waitForFakeAppServerTransport(in: transportPool, index: 0)
+        let firstInitialize = try await waitForFakeAppServerRequest(firstTransport, method: "initialize")
+        transportResponse(firstTransport, id: firstInitialize.id, result: #"{"userAgent":"fake-codex","platformFamily":"macos"}"#)
+        let firstList = try await waitForFakeAppServerRequest(firstTransport, method: "thread/list", after: 1)
+        transportResponse(firstTransport, id: firstList.id, result: #"{"data":[],"nextCursor":null}"#)
+        _ = try await firstPageTask.value
+
+        await firstTransport.failNextSend()
+        let refreshedPageTask = Task {
+            try await runtime.sessionsPage(
+                projectID: project.id,
+                cursor: nil,
+                limit: 20,
+                consistency: .authoritative
+            )
+        }
+
+        let secondTransport = try await waitForFakeAppServerTransport(in: transportPool, index: 1)
+        let secondInitialize = try await waitForFakeAppServerRequest(secondTransport, method: "initialize")
+        transportResponse(secondTransport, id: secondInitialize.id, result: #"{"userAgent":"fake-codex","platformFamily":"macos"}"#)
+        let retriedList = try await waitForFakeAppServerRequest(secondTransport, method: "thread/list", after: 1)
+        XCTAssertEqual(retriedList.params?["cwd"]?.stringValue, project.path)
+        transportResponse(
+            secondTransport,
+            id: retriedList.id,
+            result: #"{"data":[{"id":"thr_list_retry","sessionId":"thr_list_retry","preview":"已恢复","ephemeral":false,"modelProvider":"openai","createdAt":1780490200,"updatedAt":1780490201,"status":{"type":"idle"},"path":null,"cwd":"/tmp/list-retry","cliVersion":"0.0.0","source":"appServer","threadSource":"user","name":"已恢复","turns":[]}],"nextCursor":null}"#
+        )
+
+        let refreshedPage = try await refreshedPageTask.value
+        XCTAssertEqual(refreshedPage.sessions.map(\.id), ["thr_list_retry"])
+        XCTAssertEqual(transportPool.count, 2)
+    }
+
     func testCodexAppServerSessionRuntimeReconnectsAfterTransportReceiveFailure() async throws {
         let project = AgentProject(id: "proj_direct_reconnect", name: "Direct Reconnect", path: "/tmp/direct-reconnect")
         let transportPool = FakeCodexAppServerTransportPool()
@@ -2157,11 +2203,17 @@ extension ConversationDataFlowTests {
         let iPadMini = CodexUsageRingMetrics(isCompact: false)
         XCTAssertEqual(iPadMini.diameter, 34)
         XCTAssertEqual(iPadMini.innerDiameter, 23)
+        XCTAssertEqual(iPadMini.outerLineWidth, 3.8)
+        XCTAssertEqual(iPadMini.innerLineWidth, 3.2)
+        XCTAssertEqual(iPadMini.questionMarkSize, 8)
         XCTAssertEqual(iPadMini.hitSize, 44)
 
         let iPhone = CodexUsageRingMetrics(isCompact: true)
         XCTAssertEqual(iPhone.diameter, 30)
         XCTAssertEqual(iPhone.innerDiameter, 20)
+        XCTAssertEqual(iPhone.outerLineWidth, 3.4)
+        XCTAssertEqual(iPhone.innerLineWidth, 3)
+        XCTAssertEqual(iPhone.questionMarkSize, 7)
         XCTAssertEqual(iPhone.hitSize, 44)
     }
 

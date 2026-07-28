@@ -136,6 +136,7 @@ func occurrenceCount(of needle: String, in haystack: String) -> Int {
 
 final class FakeCodexAppServerTransport: CodexAppServerTransport {
     private let sentStore = FakeCodexAppServerSentStore()
+    private let sendFailureStore = FakeCodexAppServerSendFailureStore()
     private var receiveContinuation: AsyncThrowingStream<String, Error>.Continuation?
     private var receiveIterator: AsyncThrowingStream<String, Error>.Iterator
 
@@ -151,6 +152,9 @@ final class FakeCodexAppServerTransport: CodexAppServerTransport {
     func connect(url: URL, token: String) async throws {}
 
     func send(_ text: String) async throws {
+        if await sendFailureStore.consumeFailure() {
+            throw FakeCodexAppServerTransportError.receiveFailed
+        }
         await sentStore.append(text)
     }
 
@@ -170,14 +174,37 @@ final class FakeCodexAppServerTransport: CodexAppServerTransport {
         receiveContinuation?.finish(throwing: error)
     }
 
+    func failNextSend() async {
+        await sendFailureStore.arm()
+    }
+
     func sentMessages() async -> [String] {
         await sentStore.snapshot()
+    }
+}
+
+private actor FakeCodexAppServerSendFailureStore {
+    private var shouldFail = false
+
+    func arm() {
+        shouldFail = true
+    }
+
+    func consumeFailure() -> Bool {
+        defer { shouldFail = false }
+        return shouldFail
     }
 }
 
 final class FakeCodexAppServerTransportPool {
     private let lock = NSLock()
     private var transports: [FakeCodexAppServerTransport] = []
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return transports.count
+    }
 
     func make() -> CodexAppServerTransport {
         let transport = FakeCodexAppServerTransport()

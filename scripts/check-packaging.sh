@@ -109,8 +109,8 @@ release_target="$(awk '
   in_release && $1 == "name:" { name = $2 }
   END { print owner "/" name }
 ' .goreleaser.yml)"
-[[ "$release_target" == "gaixianggeng/mimi-remote" ]] \
-  || fail "GoReleaser release.github 必须固定为 gaixianggeng/mimi-remote。"
+[[ "$release_target" == "gaixianggeng/codex-ipad-agent" ]] \
+  || fail "GoReleaser release.github 必须固定为 gaixianggeng/codex-ipad-agent。"
 grep -Fqx '  mode: keep-existing' .goreleaser.yml \
   || fail "GoReleaser 必须保留已有 Release 说明，支持同 tag 恢复。"
 grep -Fqx '  replace_existing_artifacts: true' .goreleaser.yml \
@@ -138,10 +138,20 @@ grep -Fq 'MIMI_REQUIRE_MACOS_SIGNATURE: "1"' .github/workflows/release.yml \
   || fail "Release workflow 没有对已发布 Darwin 归档执行签名门禁。"
 grep -Fq 'runs-on: macos-26' .github/workflows/release.yml \
   || fail "Release workflow 没有使用支持当前 Mac deployment target 的 macos-26 runner。"
+rust_target_setup_count="$(
+  grep -Fc 'rustup target add aarch64-apple-darwin x86_64-apple-darwin' \
+    .github/workflows/release.yml
+)"
+[[ "$rust_target_setup_count" == "2" ]] \
+  || fail "Release workflow 的 verify/release job 必须安装 universal macOS Rust targets。"
 grep -Fq 'scripts/build-macos-installer.sh' .github/workflows/release.yml \
   || fail "Release workflow 没有构建 Mac DMG。"
 grep -Fq 'scripts/check-macos-installer.sh --require-notarization' .github/workflows/release.yml \
   || fail "Release workflow 没有校验 Developer ID 与 notarization。"
+grep -Fq 'com.gaixianggeng.mimi.mac.claude-bridge' scripts/build-macos-installer.sh \
+  || fail "Mac 安装包构建没有为内嵌 Claude bridge 设置稳定签名 identifier。"
+grep -Fq 'BRIDGE_PATH="$APP_PATH/Contents/Resources/alleycat-claude-bridge"' scripts/check-macos-installer.sh \
+  || fail "Mac 安装包门禁没有校验内嵌 Claude bridge。"
 grep -Fq 'gh release upload "$GITHUB_REF_NAME"' .github/workflows/release.yml \
   || fail "Release workflow 没有上传 Mac DMG 到 GitHub Release。"
 grep -Fq 'scripts/package-skill.sh' .github/workflows/release.yml \

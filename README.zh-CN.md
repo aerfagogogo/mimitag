@@ -5,12 +5,12 @@
 <h1 align="center">Mimi Remote</h1>
 
 <p align="center">
-  <strong>把 Mac 上的 Codex，带到 iPhone 和 iPad。</strong>
+  <strong>让 Mac 继续干活，你不必一直守在 Mac 前。</strong>
 </p>
 
 <p align="center">
-  开源、原生、本地优先的移动端 AI 编程工作台。<br />
-  离开电脑后继续查看进度、补充上下文、处理审批、管理 Worktree，并完成 Git 收尾。
+  开源、原生、本地优先的 Codex 移动工作台。<br />
+  iPhone 看进度，iPad 补方向，iPad Pro 做 Review 和 Git 收尾。
 </p>
 
 <p align="center">
@@ -31,97 +31,115 @@
 </p>
 
 <p align="center">
-  <img src="artifacts/social-preview/mimi-remote-social-preview-v3.png" alt="Mimi Remote 在真实 iPad 与 iPhone 界面间继续 Codex 会话" width="100%" />
+  <img src="artifacts/app-screenshots/ipad-pro-devicehub-2026-07-27-workbench.png" alt="Mimi Remote 在实体 iPad Pro 上展示宽屏 Codex 工作台" width="100%" />
 </p>
 
-Mimi Remote 通过 Tailscale 或同一局域网连接用户自己 Mac 上的 `agentd`，在明确授权的工作区内使用 Codex；Claude Code 通过仓库内的可选 Rust bridge 作为实验通道接入。代码、Codex / Claude 凭证和完整会话都留在用户自己的设备上，不经过项目维护者的服务器。
+<p align="center">
+  <sub>实体 iPad Pro、当前 Debug 构建、公开演示数据；不是重绘的概念图。</sub>
+</p>
 
-> Mimi Remote 是独立开发的第三方客户端，不隶属于 OpenAI、Anthropic 或 Tailscale，也不代表这些公司的官方产品。当前没有公开 App Store 版本，需要从源码构建；内部 TestFlight 不是公开下载渠道。
+Mimi Remote 通过 Tailscale 或同一局域网直连用户自己的 Mac。项目不运营中转服务、云账号或会话托管服务，Mac 始终是控制平面；用户主动发送给 Codex、Claude Code、GitHub、语音转写或 MCP 的数据，仍会按对应第三方服务的处理方式与条款处理。
 
-## 产品界面
+Mimi Remote 是独立开发的第三方项目，不隶属于 OpenAI、Anthropic 或 Tailscale，也不代表这些公司的官方产品。Codex 是主要支持的 Runtime；可选的 Claude Code bridge 仍处于实验阶段。
+
+> 当前还没有公开 App Store 版本，需要从源码构建 iOS App；内部 TestFlight 不是公开下载渠道。
 
 <table>
   <tr>
     <td width="50%" align="center">
-      <strong>浅色清晰，深色专注</strong><br />
-      <sub>从项目、新建会话到最近任务，都跟随系统外观自然切换。</sub>
+      <strong>iPhone · 随时看一眼、补一句</strong><br />
+      <sub>读结果、补上下文、处理审批，或者及时停止一轮任务。</sub>
     </td>
     <td width="50%" align="center">
-      <strong>同一套原生信息层级</strong><br />
-      <sub>主题变化不改变操作路径，常用动作始终留在手边。</sub>
+      <strong>iPad · 控制始终留在上下文里</strong><br />
+      <sub>会话、待发送指令、模型、权限和输入区同时可见。</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top" align="center">
-      <img src="artifacts/app-screenshots/iphone-workspace-light-real.png" alt="iPhone 浅色模式下的 Mimi Remote 工作区" width="78%" />
+      <img src="artifacts/app-screenshots/iphone-devicehub-2026-07-27-conversation.png" alt="实体 iPhone 17 Pro 上的 Mimi Remote 会话" width="58%" />
     </td>
     <td width="50%" valign="top" align="center">
-      <img src="artifacts/app-screenshots/iphone-workspace-dark-real.png" alt="iPhone 深色模式下的 Mimi Remote 工作区" width="78%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
-      <strong>会话控制不离开上下文</strong><br />
-      <sub>模型、推理强度、Skill、速度和权限模式都在输入框上方完成。</sub>
-    </td>
-    <td width="50%" align="center">
-      <strong>iPad 宽屏容纳完整工作区</strong><br />
-      <sub>项目、最近会话和快捷操作同时可见，减少页面来回切换。</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="artifacts/app-screenshots/ipad-conversation-model-picker-dark-real.png" alt="iPad 深色模式下的会话与模型推理选择器" />
-    </td>
-    <td width="50%" valign="top">
-      <img src="artifacts/app-screenshots/ipad-workspace-light-real.png" alt="iPad 浅色模式下的项目工作区" />
+      <img src="artifacts/app-screenshots/ipad-mini-devicehub-2026-07-27-queue.png" alt="实体 iPad mini 上的 Mimi Remote 待发送队列" width="72%" />
     </td>
   </tr>
 </table>
 
-本节截图由维护者从日常使用的 TestFlight 构建中提供。发布前仅把个人文件路径替换为 `/Users/demo/...`，未展示访问 Token 或 Tailnet 地址。完整处理说明见 [截图清单](artifacts/app-screenshots/manifest.md)。
+三张图来自同一份当前源码，通过 Xcode Device Hub 在实体设备上采集。Debug 专用种子数据只使用 `/Users/demo`、占位凭证和公开演示文案，没有展示个人仓库、访问 Token、Endpoint 或 Tailnet 地址。完整说明见 [截图清单](artifacts/app-screenshots/manifest.md)。
 
-## 为什么用 Mimi Remote
+## 离开工位，不离开任务
 
-Mimi Remote 不是通用 SSH 终端，也不是把桌面网页缩到手机里。它针对移动端操作 Codex 和 Claude Code 的高频场景做了原生交互：
+真正高频的需求通常不是“在手机上开一个终端”，而是“Agent 趁我离开时做完了——我想看懂它改了什么，再决定下一步”。
 
-- **离开电脑后继续 AI 编程**：在 iPhone / iPad 上查看进度、补充上下文、steer 或 interrupt 当前任务。
-- **原生 Review 与审批**：阅读 Markdown、检查 diff、处理工具审批，不必在手机终端里辨认大量转义字符。
-- **完整 Git 闭环**：支持 stage、unstage、revert、commit、push 和草稿 PR，适合在移动端完成最后一步。
-- **本地优先、自托管**：App 只连接你自己的 Mac；项目不提供中转云，也不代管代码、会话或 AI 凭证。
-- **同时面向 Codex 与 Claude Code**：Codex 是稳定主通道，Claude Code 通过独立 bridge 实验接入。
+- **看一眼：**任务是在思考、等待、失败，还是已经完成，不用重新打开 Mac。
+- **补一句：**追加上下文、排队下一条指令、切换模型或推理强度、回答问题、批准操作或中断当前 Turn。
+- **收个尾：**检查状态和 Diff、管理 Worktree、按文件或 Hunk 暂存、Commit、Push，并创建 Draft PR。
 
-## 能做什么
+iPhone 保持紧凑、适合触屏；到了 iPad，同一套原生 SwiftUI 界面会展开成项目、会话、正文与 Inspector 工作台，而不是简单把手机页面拉宽。
 
-- 原生 iPhone / iPad SwiftUI 工作台，支持深浅色、主题、字体和自适应布局。
-- Codex 会话列表、搜索、新建、恢复、流式输出、steer、interrupt、审批、目标、Review、fork 和 archive。
-- Managed Worktree 创建、分支选择、受保护删除和人工清理。
-- Git status、diff、文件与 hunk 级 stage/unstage/revert、commit、push 和草稿 PR。
-- 图片、富 Markdown、语音转写、文件安全读取和 Quick Look。
-- 多台 Mac 档案，每台使用独立 Keychain Token；同一时间只连接一台。
-- Doctor、readyz、弱网恢复、协议漂移检查和安装/回滚工具。
-- 可选 Claude Code 实验通道，共用同一套移动端会话和审批界面。
+## 它不是口袋里的终端
+
+- Codex 的消息、推理、命令、Tool 调用、审批和执行过程会组成结构化时间线，不是一整屏终端日志。
+- 模型、推理强度、Skill、速度、权限模式和待发送队列都留在 Composer 附近。
+- Markdown、图片、文件引用、语音输入和安全的 Quick Look 读取都按移动端内容呈现。
+- Worktree 与 Git 操作带预览、确认、超时和输出上限，不向手机暴露不受控的任意 Shell。
+- 多个 Mac Profile 使用独立 Keychain Token；同一时间只保持一个活动连接，心智模型更简单。
+- 就绪检查、断线恢复、Doctor 和有上限的日志导出，让多数故障不必回到电脑前处理。
 
 当前不做云端账号、代码托管、公网中继、任意远程 Shell、后台无人值守删除或多用户共享。完整边界见 [项目现状](docs/project-status.md)。
 
 ## 架构
 
 ```mermaid
-flowchart TD
-    A["Mimi Remote<br/>iPhone / iPad"] -->|"Tailscale / 同一局域网 · Bearer Token<br/>REST + WebSocket"| B["agentd<br/>Go control plane / 安全网关"]
-    B -->|"allowlist · cwd scope<br/>JSON-RPC policy"| C["Codex app-server"]
-    C --> D["Codex CLI 凭证与本机项目"]
-    B -->|"runtime=claude<br/>稳定 session + cursor"| E["常驻 alleycat-claude-bridge"]
-    E -->|"每个 thread 一个 stdio JSONL 进程"| F["Claude Code headless"]
+flowchart LR
+    subgraph Mobile["移动设备"]
+        App["Mimi Remote<br/>SwiftUI 工作台"]
+        Keychain["Keychain<br/>每个 Mac Profile 一份访问 Token"]
+        Keychain -.-> App
+    end
+
+    subgraph Mac["你的 Mac — 唯一控制面"]
+        Host["Mimi Remote Mac<br/>安装 · 配对 · Doctor · 服务生命周期"]
+        Agent["agentd<br/>认证 · REST API · WebSocket 网关 · 权限策略"]
+        Local["受限本地操作<br/>项目 · 文件 · Git · Worktree · Action"]
+        Codex["Codex app-server<br/>受管 loopback 进程"]
+        Bridge["alleycat-claude-bridge<br/>常驻 · 实验通道"]
+        Claude["Claude Code headless<br/>每个 thread 一个 stdio 进程"]
+        State["本机状态<br/>工作区 · 凭证 · 历史"]
+
+        Host -->|"启动与监控"| Agent
+        Agent -->|"校验后的本机 API"| Local
+        Agent -->|"过滤后的 JSON-RPC"| Codex
+        Agent -->|"稳定 session + cursor"| Bridge
+        Bridge -->|"stdio JSONL"| Claude
+        Local --> State
+        Codex --> State
+        Claude --> State
+    end
+
+    App -->|"Tailscale 或同一局域网<br/>Bearer Token · REST + WebSocket"| Agent
 ```
 
-安全边界：
+Mimi Remote 是原生客户端，不是另一台运行 Agent 的主机。所有远程请求都终止在你 Mac 上的 `agentd`；iOS 不会直接连接 Codex app-server、Claude Code、本机文件系统或项目维护者提供的云服务。
 
-- iOS 只保存访问 `agentd` 的外侧 Token，Token 存在 Keychain。
-- `agentd` 只允许配置中的项目、`browse_roots` 和受管 Worktree。
-- Codex app-server capability token 只保存在 Mac 的 loopback 环境。
-- 远程命令只允许执行配置中的 action，并带确认、超时和输出上限。
+系统有三条清晰的调用路径：
+
+1. **宿主生命周期：**Mimi Remote Mac 负责安装、配对、诊断、启动和监控 `agentd`，不经过每一条业务请求。命令行和 Linux 场景可以由 Homebrew 或 user-systemd 运行同一个 Go 服务。
+2. **受限本机能力：**项目发现、安全文件读取、Git、受管 Worktree、诊断、语音代理和配置 Action 都通过 `agentd` 的认证 REST API 完成，不需要绕经 Codex。
+3. **Agent 会话：**移动端只连接一个对外的 Codex-compatible JSON-RPC / WebSocket 网关。`agentd` 校验 runtime、method、由项目映射得到的工作目录、Payload 大小和连接预算，再把请求路由到主通道 Codex app-server 或实验通道 Claude bridge。
+
+Codex app-server 是由 `agentd` 管理的 loopback 进程，也是默认运行时。可选的常驻 Claude bridge 使用稳定 session key 和 replay cursor 承接移动端重连，并为每个活动 thread 管理一个 Claude Code headless stdio 进程。Provider 差异被限制在适配层内；移动端共用界面不代表两条通道功能完全一致。
+
+安全边界集中在 Mac：
+
+- 二维码只携带短期、单次使用的配对票据；换取到的长期 `agentd` Token 按 Mac Profile 保存到 Keychain。
+- app-server capability token 与 Provider 凭证不会离开 Mac；受管 app-server 只监听 loopback。
+- 客户端提交的项目 ID 必须通过配置中的项目 allowlist 解析；文件访问限制在项目根目录、`browse_roots` 和受管 Worktree。
+- Git 与 Worktree API 只暴露固定、经过参数校验的操作；通用命令必须预先配置为 Action，并受确认、超时、请求大小和输出上限约束。
+- 正常断线后通过 sequence / cursor 回放实时事件；超出回放窗口时读取本机权威历史，不会重新提交同一个 Turn。
 - 跨网络默认推荐 Tailscale；未安装时可在同一局域网直连。两种方式都不应把 `agentd` 暴露到公网。
+
+这套架构部署简单、边界可审计，但代价也很明确：Mac 必须保持唤醒并能从私有网络访问，`agentd` 与所选 Runtime 也必须健康。当前没有维护者运营的中继、云端状态同步或 APNs 后台执行链路。
 
 ### Claude Code 为什么需要单独 bridge
 
@@ -141,7 +159,7 @@ Claude bridge 位于本仓库 [`bridges/claude`](bridges/claude)，与 iOS 和 `
 - 已安装并登录 Codex CLI；
 - Mac 与 iPhone / iPad 位于同一私有网络；跨网络使用时建议加入同一个 Tailscale 网络。
 
-普通用户从 [GitHub Releases](https://github.com/gaixianggeng/mimi-remote/releases/latest) 下载 `Mimi-Remote-Mac.dmg` 和对应 SHA-256 文件，校验后打开 DMG，把 **Mimi Remote Mac** 拖到“应用程序”，再从菜单栏完成首次设置。App 已内置 `agentd` 和兼容的 Claude bridge，不要求 Homebrew、Go、Rust 或 Xcode。
+普通用户从 [GitHub Releases](https://github.com/gaixianggeng/codex-ipad-agent/releases/latest) 下载 `Mimi-Remote-Mac.dmg` 和对应 SHA-256 文件，校验后打开 DMG，把 **Mimi Remote Mac** 拖到“应用程序”，再从菜单栏完成首次设置。App 已内置 `agentd` 和兼容的 Claude bridge，不要求 Homebrew、Go、Rust 或 Xcode。
 
 已有 Homebrew 服务时，让 Mac App 执行接管；迁移过程会先跑 Doctor，失败时尝试恢复旧服务，并保留现有配置、Token 和配对关系。
 
@@ -179,7 +197,7 @@ Linux 使用 Release 归档中的 user-systemd 安装脚本，完整步骤见 [�
 如果希望由 Codex 按同一套权限最小化、可恢复流程完成安装、升级和诊断，可以让 `$skill-installer` 安装下面的 GitHub Skill 路径：
 
 ```text
-https://github.com/gaixianggeng/mimi-remote/tree/main/packaging/skill/install-mimi-remote
+https://github.com/gaixianggeng/codex-ipad-agent/tree/main/packaging/skill/install-mimi-remote
 ```
 
 每个 GitHub Release 也会附带 `install-mimi-remote.zip` 和对应 SHA-256 文件，便于固定版本下载与审计。
@@ -333,8 +351,8 @@ cargo test --locked -p alleycat-claude-bridge
 
 ## 仓库说明
 
-- 本仓库 `gaixianggeng/codex-ipad-agent`：完整开源源码，包括 iOS App、Go `agentd`、Claude bridge、测试、文档和本地发布脚本。
-- [gaixianggeng/mimi-remote](https://github.com/gaixianggeng/mimi-remote)：后端公开发布镜像，承载 Go Release 和 Homebrew 下载链路。
+- 本仓库 `gaixianggeng/codex-ipad-agent`：唯一的完整开源源码与新版本发布仓库，包括 iOS App、Mac App、Go `agentd`、Claude bridge、测试、文档和发布脚本。
+- [gaixianggeng/mimi-remote](https://github.com/gaixianggeng/mimi-remote)：只读历史发布归档，保留旧版本和既有下载地址。
 
 源码目录保持语言和职责清晰，同时避免为目录整齐大规模改写稳定构建路径：
 
@@ -344,7 +362,7 @@ cmd/agentd/ + internal/  Go 安全网关与 Codex / Claude 控制面
 bridges/claude/          Rust Claude Code 协议 bridge
 ```
 
-保留后端发布镜像是为了不破坏已有 Homebrew / Release URL；日常功能开发以本仓库为准，后端镜像由白名单脚本单向导出。
+新的 Mac、Go、Linux、Homebrew 和 Skill 产物统一由本仓库 Release 发布。旧仓库不再承载新版本，仅用于历史版本回滚和旧链接兼容。
 
 ## 常见问题（FAQ）
 

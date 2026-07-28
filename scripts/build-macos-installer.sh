@@ -188,16 +188,20 @@ xcodebuild \
 
 APP_PATH="$DERIVED_DATA/Build/Products/Release/Mimi Remote Mac.app"
 AGENT_PATH="$APP_PATH/Contents/Resources/agentd"
-if [[ ! -d "$APP_PATH" || ! -x "$AGENT_PATH" ]]; then
-  echo "Mac 安装包构建失败：Release App 或内嵌 agentd 不存在。" >&2
+BRIDGE_PATH="$APP_PATH/Contents/Resources/alleycat-claude-bridge"
+if [[ ! -d "$APP_PATH" || ! -x "$AGENT_PATH" || ! -x "$BRIDGE_PATH" ]]; then
+  echo "Mac 安装包构建失败：Release App、内嵌 agentd 或 Claude bridge 不存在。" >&2
   exit 1
 fi
 
 APP_ARCHS="$(lipo -archs "$APP_PATH/Contents/MacOS/Mimi Remote Mac")"
 AGENT_ARCHS="$(lipo -archs "$AGENT_PATH")"
+BRIDGE_ARCHS="$(lipo -archs "$BRIDGE_PATH")"
 for required_arch in arm64 x86_64; do
-  if [[ " $APP_ARCHS " != *" $required_arch "* || " $AGENT_ARCHS " != *" $required_arch "* ]]; then
-    echo "Mac 安装包构建失败：App/agentd 缺少 ${required_arch}，App=${APP_ARCHS} agentd=${AGENT_ARCHS}。" >&2
+  if [[ " $APP_ARCHS " != *" $required_arch "* \
+    || " $AGENT_ARCHS " != *" $required_arch "* \
+    || " $BRIDGE_ARCHS " != *" $required_arch "* ]]; then
+    echo "Mac 安装包构建失败：App/agentd/Claude bridge 缺少 ${required_arch}，App=${APP_ARCHS} agentd=${AGENT_ARCHS} bridge=${BRIDGE_ARCHS}。" >&2
     exit 1
   fi
 done
@@ -258,8 +262,14 @@ if [[ "$SNAPSHOT" != "1" ]]; then
   CODESIGN_TIMESTAMP=(--timestamp)
 fi
 
-echo "==> 从内到外签名 agentd 与 App"
+echo "==> 从内到外签名 Claude bridge、agentd 与 App"
 if [[ "$SNAPSHOT" == "1" ]]; then
+  codesign --force \
+    --sign "$CODESIGN_IDENTITY" \
+    --identifier com.gaixianggeng.mimi.mac.claude-bridge \
+    --options runtime \
+    "${CODESIGN_TIMESTAMP[@]}" \
+    "$BRIDGE_PATH"
   codesign --force \
     --sign "$CODESIGN_IDENTITY" \
     --identifier com.gaixianggeng.mimi.mac.agentd \
@@ -273,6 +283,13 @@ if [[ "$SNAPSHOT" == "1" ]]; then
     --entitlements "$ROOT_DIR/macos/MimiRemoteMac/Resources/MimiRemoteMac.entitlements" \
     "$APP_PATH"
 else
+  codesign --force \
+    --sign "$CODESIGN_IDENTITY" \
+    --keychain "$KEYCHAIN_PATH" \
+    --identifier com.gaixianggeng.mimi.mac.claude-bridge \
+    --options runtime \
+    "${CODESIGN_TIMESTAMP[@]}" \
+    "$BRIDGE_PATH"
   codesign --force \
     --sign "$CODESIGN_IDENTITY" \
     --keychain "$KEYCHAIN_PATH" \

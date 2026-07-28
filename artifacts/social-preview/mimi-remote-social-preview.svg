@@ -60,13 +60,13 @@
     <rect x="642" y="59" width="580" height="443" rx="34" fill="#070b14" stroke="#63708a" stroke-width="2"/>
     <image x="658" y="75" width="548" height="411" preserveAspectRatio="xMidYMid slice"
       clip-path="url(#ipad-clip)"
-      xlink:href="../app-screenshots/ipad-landscape-open-source-demo.png"/>
+      xlink:href="../app-screenshots/ipad-pro-devicehub-2026-07-27-workbench.png"/>
   </g>
 
   <g filter="url(#device-shadow)">
     <rect x="1010" y="264" width="173" height="344" rx="36" fill="#080b12" stroke="#6f7b91" stroke-width="2"/>
     <image x="1024" y="279" width="145" height="315" preserveAspectRatio="xMidYMid slice"
       clip-path="url(#phone-clip)"
-      xlink:href="../app-screenshots/iphone-conversation-open-source-demo.png"/>
+      xlink:href="../app-screenshots/iphone-devicehub-2026-07-27-conversation.png"/>
   </g>
 </svg>

@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   verify:
-    if: github.repository == 'gaixianggeng/mimi-remote'
+    if: github.repository == 'gaixianggeng/codex-ipad-agent'
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -28,6 +28,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install universal macOS Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Install repository safety tools
         run: command -v rg >/dev/null 2>&1 || brew install ripgrep
@@ -92,7 +95,7 @@ jobs:
 
   release:
     needs: verify
-    if: github.repository == 'gaixianggeng/mimi-remote'
+    if: github.repository == 'gaixianggeng/codex-ipad-agent'
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
@@ -108,6 +111,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install universal macOS Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Build Codex Skill package
         run: bash ./scripts/package-skill.sh dist-skill

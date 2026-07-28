@@ -17,9 +17,9 @@
 公开 URL：
 
 - Marketing URL：首个中国大陆版本留空，避免把 README 中的开发者兼容性说明误当作商店宣传元数据。
-- Privacy Policy URL：<https://github.com/gaixianggeng/mimi-remote/blob/main/docs/privacy-policy.md>
-- Support URL：<https://github.com/gaixianggeng/mimi-remote/blob/main/docs/support.md>
-- Terms URL：<https://github.com/gaixianggeng/mimi-remote/blob/main/docs/terms-of-use.md>
+- Privacy Policy URL：<https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/privacy-policy.md>
+- Support URL：<https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/support.md>
+- Terms URL：<https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/terms-of-use.md>
 
 ## 实现
 

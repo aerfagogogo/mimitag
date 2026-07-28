@@ -1503,7 +1503,7 @@ func TestEnsureCodexCLIAvailableRepairsStalePathBeforeServiceStart(t *testing.T)
 	document := map[string]any{
 		"auth": map[string]any{"token": authToken},
 		"codex": map[string]any{
-			"bin":           "/opt/homebrew/bin/codex",
+			"bin":           filepath.Join(t.TempDir(), "missing-codex"),
 			"future_option": "keep-codex-option",
 		},
 		"future_root": "keep-root-option",

@@ -21,7 +21,7 @@ Mimi Remote 是第三方开源客户端，不是 OpenAI、Anthropic 或 Tailscal
 - 先执行只读检查，再安装或修改；复用已有安装，不重复初始化。
 - 优先使用正式 Release，不把开发分支、未固定 commit、snapshot 或 `devel` 二进制当作稳定版本。
 - macOS 普通用户默认安装 `Mimi-Remote-Mac.dmg`；Homebrew 只用于命令行、服务器、自动化、旧安装维护或故障恢复。
-- 不假设本 Skill 所在目录或调用时的当前目录就是源码仓库。需要源码时从 `https://github.com/gaixianggeng/codex-ipad-agent.git` 获取，需要正式产物时从 `https://github.com/gaixianggeng/mimi-remote/releases` 获取。
+- 不假设本 Skill 所在目录或调用时的当前目录就是源码仓库。源码和正式产物统一从 `https://github.com/gaixianggeng/codex-ipad-agent` 获取。
 - 不覆盖有未提交改动的源码目录，不在现有脏工作树中切换 tag 或执行清理。
 - 不使用 `agentd setup --force`，除非用户明确要求轮换凭据并接受现有配对失效。
 - 不输出、转述、上传或写入任务总结中的长期 Token、Authorization header、连接链接、二维码内容、完整 Endpoint、Tailscale IP 或私有项目路径。
@@ -84,7 +84,7 @@ claude --version
 
 ## 安装 Mimi Remote Mac
 
-使用 `gaixianggeng/mimi-remote` 的最新正式 Release；用户指定版本时固定到对应 tag。下载：
+使用 `gaixianggeng/codex-ipad-agent` 的最新正式 Release；用户指定版本时固定到对应 tag。下载：
 
 ```text
 Mimi-Remote-Mac.dmg
@@ -152,7 +152,7 @@ agentd restart --no-pair
 
 ## 安装 Linux 后端
 
-使用 `gaixianggeng/mimi-remote` 的正式 Release，不从开发工作树安装 `devel` 二进制。根据架构选择归档：
+使用 `gaixianggeng/codex-ipad-agent` 的正式 Release，不从开发工作树安装 `devel` 二进制。根据架构选择归档：
 
 ```text
 mimi-remote_VERSION_linux_amd64.tar.gz

@@ -848,6 +848,61 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(options.first?.runtimeProvider, "codex")
     }
 
+    func testMultiRuntimeSessionsKeepCodexWhenOptionalClaudeListFails() async throws {
+        let project = AgentProject(id: "proj_multi_sessions", name: "Multi Sessions", path: "/tmp/multi-sessions")
+        let config = makeDirectAppServerConfig(project: project, channels: [makeClaudeChannelMetadata()])
+        let codexTransport = FakeCodexAppServerTransport()
+        let claudeTransport = FakeCodexAppServerTransport()
+        let client = MultiRuntimeSessionAPIClient(
+            codexRuntime: CodexAppServerSessionRuntime(
+                endpoint: "http://127.0.0.1:8787",
+                token: "outer-token",
+                runtimeProvider: "codex",
+                transportFactory: { codexTransport },
+                configProvider: { config }
+            ),
+            claudeRuntime: CodexAppServerSessionRuntime(
+                endpoint: "http://127.0.0.1:8787",
+                token: "outer-token",
+                runtimeProvider: "claude",
+                transportFactory: { claudeTransport },
+                configProvider: { config }
+            )
+        )
+
+        let pageTask = Task {
+            try await client.sessionsPage(projectID: project.id, cursor: nil, limit: 20)
+        }
+        let codexInitialize = try await waitForFakeAppServerRequest(codexTransport, method: "initialize")
+        transportResponse(codexTransport, id: codexInitialize.id, result: #"{"userAgent":"fake-codex","platformFamily":"macos"}"#)
+        let codexList = try await waitForFakeAppServerRequest(codexTransport, method: "thread/list", after: 1)
+        transportResponse(
+            codexTransport,
+            id: codexList.id,
+            result: appServerThreadListResult([
+                appServerThreadJSON(
+                    id: "codex-survives",
+                    cwd: project.path,
+                    source: "appServer",
+                    updatedAt: 1_780_493_000
+                )
+            ], nextCursor: nil)
+        )
+
+        let claudeInitialize = try await waitForFakeAppServerRequest(claudeTransport, method: "initialize")
+        transportResponse(claudeTransport, id: claudeInitialize.id, result: #"{"userAgent":"fake-claude","platformFamily":"macos"}"#)
+        let claudeList = try await waitForFakeAppServerRequest(claudeTransport, method: "thread/list", after: 1)
+        transportErrorResponse(
+            claudeTransport,
+            id: claudeList.id,
+            code: -32000,
+            message: "Claude bridge unavailable"
+        )
+
+        let page = try await pageTask.value
+        XCTAssertEqual(page.sessions.map(\.id), ["codex-survives"])
+    }
+
     func testMultiRuntimeClaudeRateLimitReadUsesClaudeGateway() async throws {
         let project = AgentProject(id: "proj_claude_quota", name: "Claude Quota", path: "/tmp/claude-quota")
         let config = makeDirectAppServerConfig(

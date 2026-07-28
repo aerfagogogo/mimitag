@@ -5,12 +5,12 @@
 <h1 align="center">Mimi Remote</h1>
 
 <p align="center">
-  <strong>Codex on iPhone and iPad. Away from your desk.</strong>
+  <strong>Let your Mac keep working. You do not have to stay at it.</strong>
 </p>
 
 <p align="center">
-  A native, local-first mobile workbench for coding agents running on your own Mac.<br />
-  Review results, steer sessions, approve actions, manage Worktrees, and finish Git workflows from iPhone or iPad.
+  A native, local-first mobile workbench for Codex sessions running on your own Mac.<br />
+  Check in from iPhone, steer from iPad, and finish review or Git work on iPad Pro.
 </p>
 
 <p align="center">
@@ -29,82 +29,112 @@
 </p>
 
 <p align="center">
-  <img src="artifacts/social-preview/mimi-remote-social-preview-v3.png" alt="Mimi Remote continuing a Codex session across a real iPad and iPhone interface" width="100%" />
+  <img src="artifacts/app-screenshots/ipad-pro-devicehub-2026-07-27-workbench.png" alt="Mimi Remote showing a wide Codex workbench on a real iPad Pro" width="100%" />
 </p>
 
-Mimi Remote connects to your Mac through Tailscale or the same local network and keeps source code, agent credentials, and full sessions on your own devices. Codex is the primary supported runtime; an optional Claude Code bridge is available as an experimental channel.
+<p align="center">
+  <sub>A real iPad Pro, a real Debug build, and public demo data — no mockup UI.</sub>
+</p>
 
-Mimi Remote is an independent third-party project. It is not affiliated with, endorsed by, or a product of OpenAI, Anthropic, or Tailscale.
+Mimi Remote connects directly to your Mac through Tailscale or the same local network. The project does not operate a relay, account system, or hosted session service. Your Mac remains the control plane; data you intentionally send to Codex, Claude Code, GitHub, voice transcription, or MCP is still handled by those services under their own terms.
 
-> There is no public App Store release at this time. Build the iOS app from source; any internal TestFlight distribution is not a public download channel.
+Mimi Remote is an independent third-party project. It is not affiliated with, endorsed by, or a product of OpenAI, Anthropic, or Tailscale. Codex is the primary supported runtime; the optional Claude Code bridge is experimental.
 
-## One workbench, every screen.
+> There is no public App Store release yet. Build the iOS app from source; internal TestFlight builds are not a public download channel.
 
 <table>
   <tr>
     <td width="50%" align="center">
-      <strong>Light when you want clarity.</strong><br />
-      <sub>Jump into a project, start a Codex or Claude Code session, and return to recent work.</sub>
+      <strong>iPhone · glance and steer</strong><br />
+      <sub>Catch up on the result, add context, approve the next step, or stop a turn.</sub>
     </td>
     <td width="50%" align="center">
-      <strong>Dark when you want focus.</strong><br />
-      <sub>The same native hierarchy adapts to the system appearance without changing your workflow.</sub>
+      <strong>iPad · stay in context</strong><br />
+      <sub>Keep the conversation, queued follow-ups, model, permissions, and controls together.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top" align="center">
-      <img src="artifacts/app-screenshots/iphone-workspace-light-real.png" alt="Mimi Remote workspace on an iPhone in light appearance" width="78%" />
+      <img src="artifacts/app-screenshots/iphone-devicehub-2026-07-27-conversation.png" alt="Mimi Remote conversation on a real iPhone 17 Pro" width="58%" />
     </td>
     <td width="50%" valign="top" align="center">
-      <img src="artifacts/app-screenshots/iphone-workspace-dark-real.png" alt="Mimi Remote workspace on an iPhone in dark appearance" width="78%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
-      <strong>Keep controls in context.</strong><br />
-      <sub>Choose the model, reasoning level, skill, speed, and permission mode without leaving the conversation.</sub>
-    </td>
-    <td width="50%" align="center">
-      <strong>Use the full iPad canvas.</strong><br />
-      <sub>Keep projects, recent sessions, and quick actions visible in one spacious native workspace.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="artifacts/app-screenshots/ipad-conversation-model-picker-dark-real.png" alt="Mimi Remote conversation and model reasoning picker on an iPad in dark appearance" />
-    </td>
-    <td width="50%" valign="top">
-      <img src="artifacts/app-screenshots/ipad-workspace-light-real.png" alt="Mimi Remote project workspace on an iPad in light appearance" />
+      <img src="artifacts/app-screenshots/ipad-mini-devicehub-2026-07-27-queue.png" alt="Mimi Remote queued follow-ups on a real iPad mini" width="72%" />
     </td>
   </tr>
 </table>
 
-These screenshots were provided by the maintainer from an actual TestFlight build in daily use; the interface language follows the capture device. Personal filesystem paths were replaced with `/Users/demo/...` before publication. No access tokens or Tailnet addresses are shown. See the [screenshot manifest](artifacts/app-screenshots/manifest.md) for details.
+All three images were captured from the same source tree on physical devices through Xcode Device Hub. The Debug-only seed uses `/Users/demo`, placeholder credentials, and public demo copy; no personal repository, access token, endpoint, or Tailnet address is shown. See the [screenshot manifest](artifacts/app-screenshots/manifest.md).
 
-## What it does
+## Leave the desk, not the flow
 
-- Native SwiftUI workbench for iPhone and iPad, including themes, Dynamic Type-friendly sizing, and compact/three-column layouts.
-- Codex session browsing, search, create/resume, structured streaming output, steer, interrupt, approvals, goals, review, fork, archive, and local pinning.
-- Managed Git Worktrees: create, inspect, switch branches, preview protected cleanup, and confirm deletions.
-- Git status and diffs; file/hunk stage, unstage, revert, commit, push, and draft pull-request workflows.
-- Markdown, image and file references, voice transcription, Quick Look-safe file reads, and bounded log export.
-- Multiple Mac profiles with separate Keychain tokens; only one active Mac connection at a time.
-- Diagnostics, readiness checks, offline recovery, protocol-drift checks, and source-build tooling.
+The useful moment is rarely “open a terminal on a phone.” It is “the agent finished while I was away — let me understand what changed and decide what happens next.”
 
-Codex is the primary supported runtime. Claude Code is available only through the optional bridge described below.
+- **Glance:** see whether a task is thinking, waiting, failed, or complete without reopening the Mac.
+- **Steer:** add context, queue the next instruction, change model or reasoning, answer a prompt, approve an action, or interrupt the turn.
+- **Finish:** inspect status and diffs, manage Worktrees, stage a file or hunk, commit, push, and open a draft pull request.
+
+On iPhone, the hierarchy stays compact and touch-first. On iPad, the same native SwiftUI app expands into a workbench with projects, sessions, conversation, and inspector space instead of stretching a phone layout.
+
+## More than a pocket terminal
+
+- Structured Codex output groups messages, reasoning, commands, tool calls, approvals, and work into a readable timeline.
+- Model, reasoning level, Skill, speed, permission mode, and queued turns stay next to the composer.
+- Markdown, images, file references, voice input, and safe Quick Look reads work as mobile-native content.
+- Worktree and Git actions expose previews, confirmations, timeouts, and bounded output instead of an unrestricted remote shell.
+- Multiple Mac profiles keep separate tokens in Keychain; one active connection keeps the mental model simple.
+- Readiness checks, reconnection, diagnostics, and bounded log export help recover without returning to the desk.
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    A["Mimi Remote\niPhone / iPad"] -->|"Tailscale / local network · Bearer token\nREST + WebSocket"| B["agentd\nGo control plane / safety gateway"]
-    B -->|"allowlist · cwd scope\nJSON-RPC policy"| C["Codex app-server"]
-    C --> D["Codex CLI credentials\nand local projects"]
-    B -->|"runtime=claude\nstable session + cursor"| E["resident alleycat-claude-bridge"]
-    E -->|"one stdio JSONL process per thread"| F["Claude Code headless"]
+flowchart LR
+    subgraph Mobile["Mobile device"]
+        App["Mimi Remote<br/>SwiftUI workbench"]
+        Keychain["Keychain<br/>one access token per Mac profile"]
+        Keychain -.-> App
+    end
+
+    subgraph Mac["Your Mac — the only control plane"]
+        Host["Mimi Remote Mac<br/>install · pair · Doctor · service lifecycle"]
+        Agent["agentd<br/>auth · REST API · WebSocket gateway · policy"]
+        Local["Scoped host operations<br/>projects · files · Git · Worktrees · actions"]
+        Codex["Codex app-server<br/>managed loopback process"]
+        Bridge["alleycat-claude-bridge<br/>resident · experimental"]
+        Claude["Claude Code headless<br/>one stdio process per thread"]
+        State["Local state<br/>workspaces · credentials · histories"]
+
+        Host -->|"starts and monitors"| Agent
+        Agent -->|"validated host API"| Local
+        Agent -->|"filtered JSON-RPC"| Codex
+        Agent -->|"stable session + cursor"| Bridge
+        Bridge -->|"stdio JSONL"| Claude
+        Local --> State
+        Codex --> State
+        Claude --> State
+    end
+
+    App -->|"Tailscale or local network<br/>Bearer token · REST + WebSocket"| Agent
 ```
 
-The iOS app stores only the outer `agentd` token in Keychain. The loopback app-server capability token stays on the Mac. `agentd` limits access to configured projects, `browse_roots`, and managed Worktrees; remote commands are limited to configured actions with confirmation, timeout, and output limits.
+Mimi Remote is a native client, not a second place where the agent runs. Every remote request terminates at `agentd` on your Mac; the iOS app never connects directly to Codex app-server, Claude Code, the local filesystem, or a hosted Mimi service.
+
+There are three paths through the system:
+
+1. **Host lifecycle:** Mimi Remote Mac installs, pairs, diagnoses, starts, and monitors `agentd`. It is not in the per-request data path. Homebrew or user-systemd can run the same Go service for command-line and Linux setups.
+2. **Bounded host capabilities:** project discovery, safe file reads, Git, managed Worktrees, diagnostics, voice proxying, and configured actions use authenticated REST endpoints implemented by `agentd`. They do not pass through Codex.
+3. **Agent sessions:** the mobile app uses one external Codex-compatible JSON-RPC/WebSocket gateway. `agentd` validates the runtime, method, project-derived working directory, payload size, and connection budget before routing the request to the primary Codex app-server or the experimental Claude bridge.
+
+Codex app-server is a managed loopback process and remains the primary runtime. The optional resident Claude bridge keeps a stable session key and replay cursor across mobile reconnects, then owns one headless Claude Code stdio process per active thread. Provider-specific differences stay behind this adapter boundary; the shared mobile UI does not imply feature parity.
+
+The security boundary is deliberately concentrated on the Mac:
+
+- A QR code carries a short-lived, single-use pairing ticket. The resulting long-lived `agentd` token is stored in Keychain per Mac profile.
+- The app-server capability token and provider credentials never leave the Mac. The managed app-server endpoint listens on loopback.
+- Client-supplied project IDs are resolved through the configured project allowlist. File access is limited to project roots, `browse_roots`, and managed Worktrees.
+- Git and Worktree APIs expose fixed, validated operations. General commands must be configured as actions and use confirmation, timeouts, request limits, and bounded output.
+- Live events use sequence/cursor replay after normal reconnects; when a replay window is insufficient, the client reloads authoritative local history instead of resubmitting the turn.
+
+This shape keeps deployment small and auditable, but the tradeoff is explicit: the Mac must be awake and privately reachable, and `agentd` plus the selected runtime must be healthy. There is no maintainer-operated relay, cloud state sync, or APNs background execution path.
 
 ## Install and run
 
@@ -115,7 +145,7 @@ Requirements:
 - A Mac running macOS 26 or later, with Codex CLI installed and signed in.
 - The Mac and iPhone/iPad connected to the same private network. Tailscale is recommended for access across different networks but is optional for same-LAN use.
 
-For the normal setup path, download [`Mimi-Remote-Mac.dmg`](https://github.com/gaixianggeng/mimi-remote/releases/latest/download/Mimi-Remote-Mac.dmg) and its SHA-256 file, verify the checksum, open the DMG, drag **Mimi Remote Mac** to Applications, then finish first-run setup from the menu bar. The app includes `agentd` and the compatible Claude bridge; Homebrew, Go, Rust, and Xcode are not required for the Mac host.
+For the normal setup path, download [`Mimi-Remote-Mac.dmg`](https://github.com/gaixianggeng/codex-ipad-agent/releases/latest/download/Mimi-Remote-Mac.dmg) and its SHA-256 file, verify the checksum, open the DMG, drag **Mimi Remote Mac** to Applications, then finish first-run setup from the menu bar. The app includes `agentd` and the compatible Claude bridge; Homebrew, Go, Rust, and Xcode are not required for the Mac host.
 
 For command-line installation, server use, or recovery:
 
@@ -151,7 +181,7 @@ For Linux installation and recovery steps, see [Install, upgrade, and rollback (
 To let Codex perform the same install, upgrade, diagnosis, and rollback workflow with the repository's safety constraints, install the standalone Skill from:
 
 ```text
-https://github.com/gaixianggeng/mimi-remote/tree/main/packaging/skill/install-mimi-remote
+https://github.com/gaixianggeng/codex-ipad-agent/tree/main/packaging/skill/install-mimi-remote
 ```
 
 Ask `$skill-installer` to install that GitHub path. Each GitHub Release also includes `install-mimi-remote.zip` and its SHA-256 file for an auditable, versioned copy.
@@ -312,7 +342,7 @@ cmd/agentd/ + internal/  Go safety gateway and Codex / Claude control plane
 bridges/claude/          Rust Claude Code protocol bridge
 ```
 
-This repository is the complete source repository. [`gaixianggeng/mimi-remote`](https://github.com/gaixianggeng/mimi-remote) remains a public backend-release mirror to preserve existing Go release and Homebrew download URLs.
+This repository is the complete source and release repository. New Mac, Go, Linux, Homebrew, and Skill artifacts are published here. [`gaixianggeng/mimi-remote`](https://github.com/gaixianggeng/mimi-remote) is retained as a read-only archive for historical releases and download compatibility.
 
 ## Contributing
 
