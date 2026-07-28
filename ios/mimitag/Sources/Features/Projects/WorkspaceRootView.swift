@@ -134,6 +134,7 @@ enum WorkspaceSessionAgeBoundary {
 struct WorkspaceRootView: View {
     @EnvironmentObject private var appStore: AppStore
     @EnvironmentObject private var sessionStore: SessionStore
+    @EnvironmentObject private var teamStore: TeamStore
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var appearanceStore: WorkspaceAppearanceStore
@@ -189,7 +190,9 @@ struct WorkspaceRootView: View {
             synchronizeSelection()
             // 每次进入工作区都做轻量目录同步，同时执行旧版自动候选数据清理；
             // 该请求不改变当前会话和 WebSocket，上层选择保持稳定。
-            await refreshCatalog()
+            async let catalog: Void = refreshCatalog()
+            async let teamSessions: Void = teamStore.loadSessions()
+            _ = await (catalog, teamSessions)
             synchronizeSelection()
         }
         .task {
@@ -458,7 +461,7 @@ struct WorkspaceRootView: View {
         let loadState = sessionLoadState(for: project.id)
         return WorkspaceDetailView(
             // 工作区详情承担完整历史浏览，展示所有已加载页；项目侧栏才保留 5 条预览窗口。
-            recentSessions: sessionStore.sessions(forProjectID: project.id),
+            recentSessions: combinedSessions(for: project.id),
             sessionLoadState: loadState,
             canLoadMoreSessions: sessionStore.canLoadMoreSessions(projectID: project.id),
             claudeChannelAvailable: sessionStore.hasClaudeRuntimeChannel,
@@ -478,6 +481,13 @@ struct WorkspaceRootView: View {
                 onOpenSession(session)
             }
         )
+    }
+
+    private func combinedSessions(for projectID: String) -> [AgentSession] {
+        (sessionStore.sessions(forProjectID: projectID) + teamStore.sessionIndexEntries(projectID: projectID))
+            .sorted {
+                SessionIndexStore.orderingDate(for: $0) > SessionIndexStore.orderingDate(for: $1)
+            }
     }
 
     private var selectedProject: AgentProject? {
@@ -567,7 +577,10 @@ struct WorkspaceRootView: View {
         guard sessionLoadStates[projectID] != .loading else { return }
         sessionLoadStates[projectID] = .loading
         do {
-            try await sessionStore.refreshWorkspaceSessions(projectID: projectID)
+            async let regularSessions: Void = sessionStore.refreshWorkspaceSessions(projectID: projectID)
+            async let teamSessions: Void = teamStore.loadSessions()
+            try await regularSessions
+            await teamSessions
             guard !Task.isCancelled else {
                 sessionLoadStates[projectID] = fallbackSessionLoadState(for: projectID)
                 return

@@ -9,6 +9,7 @@ struct SessionRuntimePresentation: Equatable {
     enum Kind: Equatable {
         case codex
         case claude
+        case team
     }
 
     let kind: Kind
@@ -19,10 +20,15 @@ struct SessionRuntimePresentation: Equatable {
 
     init(runtimeProvider: String?, source: String) {
         let provider = runtimeProvider?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawValue = provider?.isEmpty == false ? provider : source
-        kind = CodexAppServerSessionRuntime.normalizedRuntimeProvider(rawValue) == "claude"
-            ? .claude
-            : .codex
+        let rawValue = (provider?.isEmpty == false ? provider : nil) ?? source
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "claude":
+            kind = .claude
+        case "team":
+            kind = .team
+        default:
+            kind = .codex
+        }
     }
 
     var title: String {
@@ -31,6 +37,8 @@ struct SessionRuntimePresentation: Equatable {
             return L10n.text("ui.runtime_default")
         case .claude:
             return L10n.text("ui.runtime_optional")
+        case .team:
+            return L10n.text("ui.team")
         }
     }
 
@@ -40,6 +48,8 @@ struct SessionRuntimePresentation: Equatable {
             return "ChatGPT"
         case .claude:
             return "Claude"
+        case .team:
+            return ""
         }
     }
 }
@@ -63,11 +73,18 @@ struct SessionRuntimeBadge: View {
         let iconSize: CGFloat = compact ? 10 : 12
 
         HStack(spacing: compact ? 3 : 4) {
-            Image(presentation.brandAssetName)
-                .resizable()
-                .renderingMode(.original)
-                .scaledToFit()
-                .frame(width: iconSize, height: iconSize)
+            if presentation.kind == .team {
+                Image(systemName: "person.3.sequence.fill")
+                    .font(themeStore.uiFont(size: iconSize, weight: .semibold))
+                    .foregroundStyle(tokens.primaryAction)
+                    .frame(width: iconSize, height: iconSize)
+            } else {
+                Image(presentation.brandAssetName)
+                    .resizable()
+                    .renderingMode(.original)
+                    .scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
+            }
 
             Text(presentation.title)
                 .lineLimit(1)
@@ -136,6 +153,7 @@ struct SessionListPartition: Equatable {
 /// 完整会话库只展示轻量索引；消息历史仍在用户选中会话后按需加载。
 struct SessionListView: View {
     @EnvironmentObject private var sessionStore: SessionStore
+    @EnvironmentObject private var teamStore: TeamStore
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedWorkspaceID = "all"
@@ -245,7 +263,11 @@ struct SessionListView: View {
                     accessibilityLabel: L10n.text("ui.refresh_session_library"),
                     tokens: tokens
                 ) {
-                    Task { await sessionStore.refreshSessionLibraryIndex(authoritative: true) }
+                    Task {
+                        async let regularSessions: Void = sessionStore.refreshSessionLibraryIndex(authoritative: true)
+                        async let teamSessions: Void = teamStore.loadSessions()
+                        _ = await (regularSessions, teamSessions)
+                    }
                 }
 
                 sessionListToolbarButton(
@@ -259,7 +281,9 @@ struct SessionListView: View {
             }
         }
         .task {
-            await sessionStore.refreshSessionLibraryIndex()
+            async let regularSessions: Void = sessionStore.refreshSessionLibraryIndex()
+            async let teamSessions: Void = teamStore.loadSessions()
+            _ = await (regularSessions, teamSessions)
         }
     }
 
@@ -281,9 +305,13 @@ struct SessionListView: View {
     }
 
     private var visibleSessions: [AgentSession] {
-        sessionStore.sessionLibrarySessions.filter { session in
+        (sessionStore.sessionLibrarySessions + teamStore.sessionIndexEntries)
+            .filter { session in
             (selectedWorkspaceID == "all" || session.projectID == selectedWorkspaceID) &&
                 selectedStatus.includes(session)
+        }
+        .sorted {
+            SessionIndexStore.orderingDate(for: $0) > SessionIndexStore.orderingDate(for: $1)
         }
     }
 
@@ -294,24 +322,36 @@ struct SessionListView: View {
     @ViewBuilder
     private func sessionRows(_ sessions: [AgentSession]) -> some View {
         ForEach(sessions) { session in
-            SessionIndexRow(
-                session: session,
-                foregroundActivity: sessionStore.foregroundActivity(for: session.id),
-                isSelected: session.id == sessionStore.selectedSessionID,
-                isPinned: sessionStore.isSessionPinned(session.id),
-                isArchived: sessionStore.isSessionArchived(session.id),
-                reminder: sessionStore.sessionReminder(for: session.id),
-                isObserving: sessionStore.isSessionObserving(session),
-                style: .library,
-                searchSnippet: sessionStore.sessionSearchSnippet(for: session.id)
-            )
-            .contentShape(Rectangle())
-            .onTapGesture { select(session) }
-            .accessibilityIdentifier("sessions.row.\(session.id)")
-            .sessionRowActions(session)
-            .listRowInsets(.init(top: 4, leading: 20, bottom: 4, trailing: 20))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+            sessionRow(session)
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRow(_ session: AgentSession) -> some View {
+        let row = SessionIndexRow(
+            session: session,
+            foregroundActivity: session.runtimeProvider == "team" ? nil : sessionStore.foregroundActivity(for: session.id),
+            isSelected: session.runtimeProvider == "team"
+                ? session.id == teamStore.selectedSession?.id
+                : session.id == sessionStore.selectedSessionID,
+            isPinned: session.runtimeProvider == "team" ? false : sessionStore.isSessionPinned(session.id),
+            isArchived: session.runtimeProvider == "team" ? false : sessionStore.isSessionArchived(session.id),
+            reminder: session.runtimeProvider == "team" ? nil : sessionStore.sessionReminder(for: session.id),
+            isObserving: session.runtimeProvider == "team" ? false : sessionStore.isSessionObserving(session),
+            style: .library,
+            searchSnippet: session.runtimeProvider == "team" ? nil : sessionStore.sessionSearchSnippet(for: session.id)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { select(session) }
+        .accessibilityIdentifier("sessions.row.\(session.id)")
+        .listRowInsets(.init(top: 4, leading: 20, bottom: 4, trailing: 20))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+
+        if session.runtimeProvider == "team" {
+            row
+        } else {
+            row.sessionRowActions(session)
         }
     }
 

@@ -455,20 +455,95 @@ struct AgentAPIClient {
         return try await request(path: "/api/voice/transcribe", method: "POST", body: body, timeout: 60)
     }
 
-    func teamBootstrap() async throws -> TeamBootstrapResponse {
-        try await request(path: "/api/team/bootstrap", method: "GET", body: Optional<Data>.none)
+    func teamSessions() async throws -> TeamSessionsResponse {
+        try await request(path: "/api/team/sessions", method: "GET", body: Optional<Data>.none)
     }
 
-    func teamMessages(since: Int64) async throws -> TeamMessagesResponse {
+    func createTeamSession(project: AgentProject, title: String, agentIDs: [String]) async throws -> TeamSession {
+        let body = try JSONEncoder().encode(TeamSessionCreateRequest(
+            title: title,
+            workspaceId: project.id,
+            workspaceName: project.name,
+            workspacePath: project.path,
+            agentIds: agentIDs
+        ))
+        return try await request(path: "/api/team/sessions", method: "POST", body: body)
+    }
+
+    func teamBootstrap(sessionID: String) async throws -> TeamBootstrapResponse {
+        let path = makePath("/api/team/bootstrap", query: ["session_id": sessionID])
+        return try await request(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
+    func teamMessages(sessionID: String, since: Int64) async throws -> TeamMessagesResponse {
         let path = makePath(
             "/api/team/messages",
-            query: ["since": since > 0 ? String(since) : nil]
+            query: [
+                "session_id": sessionID,
+                "since": since > 0 ? String(since) : nil
+            ]
         )
         return try await request(path: path, method: "GET", body: Optional<Data>.none)
     }
 
-    func sendTeamMessage(content: String) async throws -> TeamSendResponse {
-        let body = try JSONEncoder().encode(["content": content])
+    func uploadTeamAttachment(
+        sessionID: String,
+        filename: String,
+        mimeType: String,
+        dataBase64: String
+    ) async throws -> TeamAttachment {
+        let body = try JSONEncoder().encode(TeamAttachmentUploadRequest(
+            sessionId: sessionID,
+            filename: filename,
+            mimeType: mimeType,
+            dataBase64: dataBase64
+        ))
+        return try await request(path: "/api/team/attachments", method: "POST", body: body, timeout: 60)
+    }
+
+    func teamAttachmentData(id: String) async throws -> Data {
+        let baseURL = try EndpointTransportPolicy.validatedURL(endpoint)
+        let encodedID = Self.percentEncodedPathComponent(id)
+        guard let url = makeURL(baseURL: baseURL, path: "/api/team/attachments/\(encodedID)") else {
+            throw AgentAPIError.invalidEndpoint
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AgentAPIError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = decodeError(data)
+            if AgentAPIError.isCredentialRejection(
+                status: http.statusCode,
+                message: message,
+                authenticationChallenge: http.value(forHTTPHeaderField: "WWW-Authenticate")
+            ) {
+                throw AgentAPIError.credentialsInvalid(status: http.statusCode)
+            }
+            throw AgentAPIError.server(status: http.statusCode, message: message)
+        }
+        return data
+    }
+
+    func sendTeamMessage(
+        sessionID: String,
+        content: String,
+        agentIDs: [String],
+        attachmentIDs: [String],
+        asTask: Bool = false
+    ) async throws -> TeamSendResponse {
+        let body = try JSONEncoder().encode(TeamMessageSendRequest(
+            sessionId: sessionID,
+            content: content,
+            agentIds: agentIDs,
+            attachmentIds: attachmentIDs,
+            asTask: asTask
+        ))
         return try await request(path: "/api/team/messages", method: "POST", body: body)
     }
 

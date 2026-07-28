@@ -14,6 +14,8 @@ const (
 	pairingRequestBodyMaxBytes int64 = 16 << 10
 	// 团队消息正文最多 16 KiB；额外空间用于 JSON 转义和字段名。
 	teamMessageRequestBodyMaxBytes int64 = 24 << 10
+	// 单个团队附件最多 3 MiB；base64 膨胀约 4/3，再预留 JSON 字段空间。
+	teamAttachmentRequestBodyMaxBytes int64 = 5 << 20
 	// 12 MiB 原始音频经过 base64 后约 16 MiB，再预留 1 MiB 给 JSON、文件名、语言和 prompt。
 	voiceRequestBodyMaxBytes int64 = 17 << 20
 )
@@ -41,6 +43,8 @@ func requestBodyLimitForPath(path string) int64 {
 		return voiceRequestBodyMaxBytes
 	case "/api/team/messages":
 		return teamMessageRequestBodyMaxBytes
+	case "/api/team/attachments":
+		return teamAttachmentRequestBodyMaxBytes
 	default:
 		return defaultAPIRequestBodyMaxBytes
 	}

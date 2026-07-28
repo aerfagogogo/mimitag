@@ -12,6 +12,7 @@ struct TeamConversationView: View {
     @State private var attachments: [String] = []
     @State private var photoLibraryPickerRequest: PhotoLibraryPickerRequest?
     @State private var attachmentErrorMessage: String?
+    @State private var sendsAsTask = false
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -20,17 +21,20 @@ struct TeamConversationView: View {
             if let errorMessage = teamStore.errorMessage {
                 errorBanner(errorMessage, tokens: tokens)
             }
+            if !selectedUnavailableAgents.isEmpty {
+                agentAvailabilityBanner(tokens: tokens)
+            }
 
             messageList(tokens: tokens)
             composer(tokens: tokens)
         }
         .background(tokens.background.ignoresSafeArea())
-        .navigationTitle(teamStore.selectedWorkspace?.name ?? L10n.text("ui.team"))
+        .navigationTitle(teamStore.selectedSession?.title ?? L10n.text("ui.team"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 2) {
-                    Text(teamStore.selectedWorkspace?.name ?? L10n.text("ui.team"))
+                    Text(teamStore.selectedSession?.title ?? teamStore.selectedWorkspace?.name ?? L10n.text("ui.team"))
                         .font(themeStore.uiFont(.headline, weight: .semibold))
                         .foregroundStyle(tokens.primaryText)
                         .lineLimit(1)
@@ -56,7 +60,7 @@ struct TeamConversationView: View {
                 }
             }
         }
-        .task {
+        .task(id: teamStore.selectedSession?.id) {
             await teamStore.load()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
@@ -154,6 +158,24 @@ struct TeamConversationView: View {
         .background(tokens.warning.opacity(0.12))
     }
 
+    private func agentAvailabilityBanner(tokens: ThemeTokens) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(tokens.warning)
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(selectedUnavailableAgents) { agent in
+                    Text("@\(agent.name) · \(agent.unavailableReason ?? L10n.text("ui.not_available"))")
+                        .font(themeStore.uiFont(.caption, weight: .semibold))
+                        .foregroundStyle(tokens.secondaryText)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(tokens.warning.opacity(0.12))
+    }
+
     private func messageList(tokens: ThemeTokens) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -219,6 +241,25 @@ struct TeamConversationView: View {
                         message.isUser ? tokens.primaryAction : tokens.elevatedSurface,
                         in: RoundedRectangle(cornerRadius: 15, style: .continuous)
                     )
+
+                if let attachments = message.attachments, !attachments.isEmpty {
+                    VStack(alignment: message.isUser ? .trailing : .leading, spacing: 5) {
+                        ForEach(attachments) { attachment in
+                            if attachment.mimeType.hasPrefix("image/") {
+                                TeamRemoteImageAttachment(attachment: attachment)
+                                    .environmentObject(teamStore)
+                                    .environmentObject(themeStore)
+                            } else {
+                                Label(attachment.filename, systemImage: "paperclip")
+                                    .font(themeStore.uiFont(.caption))
+                                    .foregroundStyle(tokens.secondaryText)
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 30)
+                                    .background(tokens.elevatedSurface, in: Capsule())
+                            }
+                        }
+                    }
+                }
             }
 
             if !message.isUser {
@@ -311,22 +352,49 @@ struct TeamConversationView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(teamStore.agents) { agent in
-                                HStack(spacing: 5) {
-                                    Circle()
-                                        .fill(agent.isOnline ? tokens.success : tokens.tertiaryText)
-                                        .frame(width: 6, height: 6)
-                                    Text("@\(agent.name)")
-                                        .font(themeStore.uiFont(.caption, weight: .semibold))
+                                let selected = teamStore.selectedAgentIDs.contains(agent.id)
+                                Button {
+                                    teamStore.toggleAgent(agent)
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Circle()
+                                            .fill(agent.canReceiveWork ? tokens.success : tokens.warning)
+                                            .frame(width: 6, height: 6)
+                                        VStack(alignment: .leading, spacing: 0) {
+                                            Text("@\(agent.name)")
+                                                .font(themeStore.uiFont(.caption, weight: .semibold))
+                                            Text("\(agent.runtime) · \(agent.modelLabel)")
+                                                .font(themeStore.uiFont(.caption2))
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    .foregroundStyle(selected ? tokens.primaryActionForeground : tokens.secondaryText)
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 40)
+                                    .background(
+                                        selected ? tokens.primaryAction : tokens.elevatedSurface,
+                                        in: Capsule()
+                                    )
                                 }
-                                .foregroundStyle(tokens.secondaryText)
-                                .padding(.horizontal, 9)
-                                .frame(height: 32)
-                                .background(tokens.elevatedSurface, in: Capsule())
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("@\(agent.name), \(agent.runtime), \(agent.modelLabel)")
                             }
                         }
                     }
 
                     Spacer(minLength: 4)
+
+                    Button {
+                        sendsAsTask.toggle()
+                    } label: {
+                        Image(systemName: sendsAsTask ? "checkmark.square.fill" : "square")
+                            .font(themeStore.uiFont(size: 15, weight: .semibold))
+                            .frame(width: 38, height: 38)
+                            .background(tokens.elevatedSurface, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(sendsAsTask ? tokens.primaryAction : tokens.secondaryText)
+                    .accessibilityLabel(L10n.text("ui.task"))
 
                     Button(action: sendDraft) {
                         Group {
@@ -390,7 +458,15 @@ struct TeamConversationView: View {
 
     private var canSend: Bool {
         let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return (hasText || !attachments.isEmpty) && !teamStore.isSending
+        return (hasText || !attachments.isEmpty)
+            && !teamStore.selectedAgentIDs.isEmpty
+            && !teamStore.isSending
+    }
+
+    private var selectedUnavailableAgents: [TeamAgent] {
+        teamStore.agents.filter {
+            teamStore.selectedAgentIDs.contains($0.id) && !$0.canReceiveWork
+        }
     }
 
     private var mentionQueryRange: Range<String.Index>? {
@@ -418,6 +494,10 @@ struct TeamConversationView: View {
     }
 
     private func replaceMentionQuery(with name: String) {
+        if let agent = teamStore.agents.first(where: { $0.name == name }),
+           !teamStore.selectedAgentIDs.contains(agent.id) {
+            teamStore.toggleAgent(agent)
+        }
         guard let range = mentionQueryRange else {
             let separator = draft.isEmpty || draft.last?.isWhitespace == true ? "" : " "
             draft += "\(separator)@\(name) "
@@ -528,17 +608,24 @@ struct TeamConversationView: View {
     private func sendDraft() {
         let normalizedText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let sendingAttachments = attachments
+        let sendingAsTask = sendsAsTask
         guard canSend else {
             return
         }
 
         draft = ""
         attachments.removeAll()
+        sendsAsTask = false
         Task {
-            if await teamStore.send(normalizedText, imageDataURLs: sendingAttachments) == false {
+            if await teamStore.send(
+                normalizedText,
+                imageDataURLs: sendingAttachments,
+                asTask: sendingAsTask
+            ) == false {
                 await MainActor.run {
                     draft = normalizedText
                     attachments = sendingAttachments
+                    sendsAsTask = sendingAsTask
                 }
             }
         }
@@ -604,6 +691,55 @@ private struct TeamImageAttachmentChip: View {
                 maxPixelSize: 360
             )
             isLoading = false
+        }
+    }
+}
+
+private struct TeamRemoteImageAttachment: View {
+    @EnvironmentObject private var teamStore: TeamStore
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.colorScheme) private var colorScheme
+    let attachment: TeamAttachment
+
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 320, maxHeight: 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else if failed {
+                Label(attachment.filename, systemImage: "exclamationmark.triangle")
+                    .font(themeStore.uiFont(.caption))
+                    .foregroundStyle(tokens.secondaryText)
+                    .padding(.horizontal, 10)
+                    .frame(height: 34)
+                    .background(tokens.elevatedSurface, in: Capsule())
+            } else {
+                ProgressView()
+                    .frame(width: 96, height: 72)
+                    .background(tokens.elevatedSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .task(id: attachment.id) {
+            do {
+                let data = try await teamStore.attachmentData(id: attachment.id)
+                guard let loaded = UIImage(data: data) else {
+                    failed = true
+                    return
+                }
+                image = loaded
+            } catch is CancellationError {
+                return
+            } catch {
+                failed = true
+            }
         }
     }
 }

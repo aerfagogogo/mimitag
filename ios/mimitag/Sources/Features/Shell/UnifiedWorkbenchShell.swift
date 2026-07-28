@@ -669,23 +669,23 @@ struct UnifiedWorkbenchShell: View {
                     )
                 }
 
-                if !sessionStore.activeSessions.isEmpty {
+                if !sidebarActiveSessions.isEmpty {
                     Section(L10n.text("ui.in_progress")) {
-                        ForEach(sessionStore.activeSessions) { session in
-                            sidebarSessionLink(session)
+                        ForEach(sidebarActiveSessions) { session in
+                            sidebarSessionLink(session, layout: layout)
                         }
                     }
                 }
 
-                Section(sessionStore.activeSessions.isEmpty ? L10n.text("ui.recently") : L10n.text("ui.recent_history")) {
-                    if sessionStore.recentHistorySessions.isEmpty {
-                        Text(sessionStore.activeSessions.isEmpty ? L10n.text("ui.no_recent_conversations_yet") : L10n.text("ui.no_history_sessions_yet"))
+                Section(sidebarActiveSessions.isEmpty ? L10n.text("ui.recently") : L10n.text("ui.recent_history")) {
+                    if sidebarRecentHistorySessions.isEmpty {
+                        Text(sidebarActiveSessions.isEmpty ? L10n.text("ui.no_recent_conversations_yet") : L10n.text("ui.no_history_sessions_yet"))
                             .font(themeStore.uiFont(.caption))
                             .foregroundStyle(tokens.tertiaryText)
                             .listRowBackground(Color.clear)
                     } else {
-                        ForEach(sessionStore.recentHistorySessions) { session in
-                            sidebarSessionLink(session)
+                        ForEach(sidebarRecentHistorySessions) { session in
+                            sidebarSessionLink(session, layout: layout)
                         }
                     }
                 }
@@ -745,27 +745,62 @@ struct UnifiedWorkbenchShell: View {
             }
         }
         .task {
-            await sessionStore.refreshSessionLibraryIndex()
+            async let regularSessions: Void = sessionStore.refreshSessionLibraryIndex()
+            async let teamSessions: Void = teamStore.loadSessions()
+            _ = await (regularSessions, teamSessions)
         }
     }
 
-    private func sidebarSessionLink(_ session: AgentSession) -> some View {
-        NavigationLink(value: AppDestination.session(session.id)) {
-            SessionIndexRow(
-                session: session,
-                foregroundActivity: sessionStore.foregroundActivity(for: session.id),
-                isSelected: session.id == sessionStore.selectedSessionID,
-                isPinned: sessionStore.isSessionPinned(session.id),
-                isArchived: sessionStore.isSessionArchived(session.id),
-                reminder: sessionStore.sessionReminder(for: session.id),
-                isObserving: sessionStore.isSessionObserving(session),
-                style: .sidebar
-            )
+    private var sidebarActiveSessions: [AgentSession] {
+        sessionStore.activeSessions
+    }
+
+    private var sidebarRecentHistorySessions: [AgentSession] {
+        Array(
+            (sessionStore.recentHistorySessions + teamStore.sessionIndexEntries)
+                .sorted {
+                    SessionIndexStore.orderingDate(for: $0) > SessionIndexStore.orderingDate(for: $1)
+                }
+                .prefix(8)
+        )
+    }
+
+    @ViewBuilder
+    private func sidebarSessionLink(_ session: AgentSession, layout: WorkbenchLayout) -> some View {
+        if session.runtimeProvider == "team" {
+            Button {
+                openIndexedSession(session, source: .sessions, layout: layout)
+            } label: {
+                sidebarSessionRow(session)
+            }
+            .buttonStyle(.plain)
+            .listRowInsets(.init(top: 2, leading: 8, bottom: 2, trailing: 8))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        } else {
+            NavigationLink(value: AppDestination.session(session.id)) {
+                sidebarSessionRow(session)
+            }
+            .sessionRowActions(session)
+            .listRowInsets(.init(top: 2, leading: 8, bottom: 2, trailing: 8))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
         }
-        .sessionRowActions(session)
-        .listRowInsets(.init(top: 2, leading: 8, bottom: 2, trailing: 8))
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
+    }
+
+    private func sidebarSessionRow(_ session: AgentSession) -> some View {
+        SessionIndexRow(
+            session: session,
+            foregroundActivity: session.runtimeProvider == "team" ? nil : sessionStore.foregroundActivity(for: session.id),
+            isSelected: session.runtimeProvider == "team"
+                ? session.id == teamStore.selectedSession?.id
+                : session.id == sessionStore.selectedSessionID,
+            isPinned: session.runtimeProvider == "team" ? false : sessionStore.isSessionPinned(session.id),
+            isArchived: session.runtimeProvider == "team" ? false : sessionStore.isSessionArchived(session.id),
+            reminder: session.runtimeProvider == "team" ? nil : sessionStore.sessionReminder(for: session.id),
+            isObserving: session.runtimeProvider == "team" ? false : sessionStore.isSessionObserving(session),
+            style: .sidebar
+        )
     }
 
     private func sidebarFooter(tokens: ThemeTokens, bottomSafeAreaInset: CGFloat) -> some View {
@@ -845,7 +880,7 @@ struct UnifiedWorkbenchShell: View {
         SessionListView(
             onNewSession: { presentedSheet = .newSession },
             onSelectSession: { session in
-                openSession(session, source: .sessions, layout: layout)
+                openIndexedSession(session, source: .sessions, layout: layout)
             }
         )
     }
@@ -854,8 +889,10 @@ struct UnifiedWorkbenchShell: View {
         WorkspaceRootView(
             onStartSession: { project, runtimeChoice in
                 if runtimeChoice == .team {
-                    teamStore.selectWorkspace(project)
-                    open(.team, source: .workspaces, layout: layout)
+                    Task {
+                        guard await teamStore.createSession(for: project) != nil else { return }
+                        open(.team, source: .workspaces, layout: layout)
+                    }
                 } else {
                     Task {
                         await sessionStore.startNewSession(in: project, runtimeProvider: runtimeChoice.runtimeProvider)
@@ -864,13 +901,26 @@ struct UnifiedWorkbenchShell: View {
             },
             onOpenSession: { session in
                 // 选择会话和切换路由由同一个入口发起，避免 selectedSessionID 的回调再次 open。
-                openSession(session, source: .workspaces, layout: layout)
+                openIndexedSession(session, source: .workspaces, layout: layout)
             },
             // 紧凑布局的 destination 必须复用外层绑定 path 的 NavigationStack。
             embedsNavigationStack: WorkspaceRootView.shouldEmbedNavigationStack(
                 usesCompactNavigation: layout.usesCompactNavigation
             )
         )
+    }
+
+    private func openIndexedSession(
+        _ session: AgentSession,
+        source: WorkbenchRootPage,
+        layout: WorkbenchLayout
+    ) {
+        if session.runtimeProvider == "team" {
+            guard teamStore.openSession(id: session.id) else { return }
+            open(.team, source: source, layout: layout)
+            return
+        }
+        openSession(session, source: source, layout: layout)
     }
 
     private func sessionDetail(layout: WorkbenchLayout, tokens: ThemeTokens) -> some View {
