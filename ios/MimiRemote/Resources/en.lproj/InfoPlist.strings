@@ -1,6 +1,6 @@
 /* Localized system permission prompts. Keep the base Info.plist in English as the fallback. */
-"CFBundleDisplayName" = "Mimi Remote";
-"NSLocalNetworkUsageDescription" = "Allow Mimi Remote to find and connect to a development environment you configure.";
-"NSCameraUsageDescription" = "Allow Mimi Remote to scan a pairing QR code.";
-"NSMicrophoneUsageDescription" = "Allow Mimi Remote to turn your speech into text in the message composer.";
-"NSSpeechRecognitionUsageDescription" = "Allow Mimi Remote to recognize speech and insert it into the message composer.";
+"CFBundleDisplayName" = "mimitag";
+"NSLocalNetworkUsageDescription" = "Allow mimitag to find and connect to a development environment you configure.";
+"NSCameraUsageDescription" = "Allow mimitag to scan a pairing QR code.";
+"NSMicrophoneUsageDescription" = "Allow mimitag to turn your speech into text in the message composer.";
+"NSSpeechRecognitionUsageDescription" = "Allow mimitag to recognize speech and insert it into the message composer.";

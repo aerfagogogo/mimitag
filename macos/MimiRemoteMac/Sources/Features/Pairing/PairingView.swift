@@ -159,7 +159,7 @@ private struct PairingIntroduction: View {
                     .font(.system(size: 28, weight: .bold))
                     .tracking(-0.55)
 
-                Text("在 iPhone 或 iPad 上打开 Mimi Remote，\n然后扫描下方二维码。")
+                Text("在 iPhone 或 iPad 上打开 mimitag，\n然后扫描下方二维码。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

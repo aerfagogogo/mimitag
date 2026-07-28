@@ -21,7 +21,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gaixianggeng.mimi.mac
-        PRODUCT_NAME: Mimi Remote Mac
+        PRODUCT_NAME: mimitag
         PRODUCT_MODULE_NAME: MimiRemoteMac
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Resources/MimiRemoteMac.entitlements
@@ -44,7 +44,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gaixianggeng.mimi.macTests
         GENERATE_INFOPLIST_FILE: "YES"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Mimi Remote Mac.app/Contents/MacOS/Mimi Remote Mac"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/mimitag.app/Contents/MacOS/mimitag"
         BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   MimiRemoteMac:

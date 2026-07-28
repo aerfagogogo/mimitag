@@ -712,11 +712,34 @@ struct ComposerView: View {
     var composerStatusRow: some View {
         let showWave = isVoiceActive
         let showControls = canShowRunningControls
-        if showWave || showControls {
+        let showSessionAutoApproval = sessionStore.isSessionAutoApprovalEnabled(sessionID: sessionStore.selectedSessionID)
+        if showWave || showControls || showSessionAutoApproval {
             HStack(spacing: 10) {
                 if showWave {
                     voiceWaveformContent
                         .layoutPriority(1)
+                }
+                if showSessionAutoApproval {
+                    Button {
+                        if let sessionID = sessionStore.selectedSessionID {
+                            sessionStore.setSessionAutoApproval(false, sessionID: sessionID)
+                        }
+                        composerState.applyPermissionMode(.requestApproval)
+                    } label: {
+                        Label(L10n.text("ui.session_auto_approval_enabled"), systemImage: "bolt.shield.fill")
+                            .font(themeStore.uiFont(.caption, weight: .semibold))
+                            .foregroundStyle(themeStore.tokens(for: colorScheme).success)
+                            .padding(.horizontal, 11)
+                            .frame(height: 34)
+                            .background(
+                                themeStore.tokens(for: colorScheme).success.opacity(0.1),
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
+                    .accessibilityHint(L10n.text("ui.tap_to_disable_session_auto_approval"))
+                    .accessibilityIdentifier("composer.sessionAutoApproval")
+                    .layoutPriority(1)
                 }
                 Spacer(minLength: 0)
                 if showControls {
@@ -1775,6 +1798,10 @@ struct ComposerView: View {
     }
 
     func applyDefaultPermissionMode() {
+        if sessionStore.isSessionAutoApprovalEnabled(sessionID: sessionStore.selectedSessionID) {
+            composerState.applyPermissionMode(.autoApprove)
+            return
+        }
         let stored = ComposerPermissionMode.stored(defaultPermissionModeID)
         composerState.applyPermissionMode(safePermissionMode(stored))
     }
@@ -1784,6 +1811,10 @@ struct ComposerView: View {
         // Claude 的安全降级只影响当前会话，不覆盖用户为 Codex 保存的“完全访问”默认值。
         if selectedSessionRuntimeProviderForModelMenu != "claude" {
             defaultPermissionModeID = safeMode.rawValue
+        }
+        if safeMode != .autoApprove,
+           let sessionID = sessionStore.selectedSessionID {
+            sessionStore.setSessionAutoApproval(false, sessionID: sessionID)
         }
         composerState.applyPermissionMode(safeMode)
     }

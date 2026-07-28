@@ -16,8 +16,8 @@ final class TeamFeatureTests: XCTestCase {
         )
     }
 
-    func testWorkspaceScopeReadsLegacyMimiTagMessages() {
-        let legacy = "[MimiTag 工作区：旧项目 — /tmp/legacy]\n继续处理"
+    func testWorkspaceScopeReadsLegacymimitagMessages() {
+        let legacy = "[mimitag 工作区：旧项目 — /tmp/legacy]\n继续处理"
         XCTAssertEqual(
             TeamWorkspaceScope.parse(from: legacy),
             TeamWorkspaceScope(name: "旧项目", path: "/tmp/legacy", message: "继续处理")

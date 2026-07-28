@@ -13,7 +13,7 @@ struct QRCodeView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: size, height: size)
-                .accessibilityLabel("Mimi Remote 配对二维码")
+                .accessibilityLabel("mimitag 配对二维码")
         } else {
             ContentUnavailableView("二维码生成失败", systemImage: "qrcode")
                 .frame(width: size, height: size)

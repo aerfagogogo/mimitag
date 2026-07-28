@@ -30,7 +30,7 @@ xcodebuild \
   CODE_SIGN_STYLE=Automatic \
   build
 
-app_path="$derived_data/Build/Products/$configuration/Mimi Remote Mac.app"
+app_path="$derived_data/Build/Products/$configuration/mimitag.app"
 /usr/bin/codesign --verify --deep --strict "$app_path"
 "$app_path/Contents/Resources/agentd" version >/dev/null
 

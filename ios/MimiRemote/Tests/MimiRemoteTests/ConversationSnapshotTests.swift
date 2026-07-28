@@ -1033,7 +1033,7 @@ final class ConversationSnapshotTests: SimplifiedChineseSnapshotTestCase {
         let threadID = "thread-\(sessionID)"
         let goal = ThreadGoal(
             threadID: threadID,
-            objective: "你是 Mimi Remote 的多 Agent 产品研发团队主控，需要把目标、接管和额度状态压缩到输入框上方。",
+            objective: "你是 mimitag 的多 Agent 产品研发团队主控，需要把目标、接管和额度状态压缩到输入框上方。",
             status: goalStatus,
             tokenBudget: 12_000_000,
             tokensUsed: 10_200_000,
@@ -1377,7 +1377,7 @@ final class ConversationSnapshotTests: SimplifiedChineseSnapshotTestCase {
 final class PendingApprovalCardSnapshotTests: SimplifiedChineseSnapshotTestCase {
     private let longCommand = """
     echo "=== find agentd logs ==="; ls -lat /private/tmp/*agentd* /private/tmp/mimi* /tmp/*agentd* 2>/dev/null | head
-    echo "=== app LaunchAgent log config ==="; plutil -p "/Applications/Mimi Remote Mac.app/Contents/Library/LaunchAgents/com.gaixianggeng.mimi.mac.agentd.plist"
+    echo "=== app LaunchAgent log config ==="; plutil -p "/Applications/mimitag.app/Contents/Library/LaunchAgents/com.gaixianggeng.mimi.mac.agentd.plist"
     echo "=== user logs ==="; ls -lat "$HOME/Library/Logs/" 2>/dev/null | grep -i mimi | head
     """
 
@@ -1429,7 +1429,9 @@ final class PendingApprovalCardSnapshotTests: SimplifiedChineseSnapshotTestCase 
                 source: "codex"
             ),
             isSendingDecision: false,
-            onDecision: { _ in }
+            isSessionAutoApprovalEnabled: false,
+            onDecision: { _ in },
+            onEnableSessionAutoApproval: {}
         )
         .environmentObject(themeStore)
         .environment(\.colorScheme, .light)

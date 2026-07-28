@@ -342,8 +342,14 @@ extension ComposerView {
                 approval: approval,
                 runtimePresentation: SessionRuntimePresentation(session: session),
                 isSendingDecision: sessionStore.isApprovalDecisionPending(approval),
+                isSessionAutoApprovalEnabled: sessionStore.isSessionAutoApprovalEnabled(sessionID: session.id),
                 onDecision: { decision in
                     sessionStore.decideApproval(approval, decision: decision)
+                },
+                onEnableSessionAutoApproval: {
+                    sessionStore.setSessionAutoApproval(true, sessionID: session.id)
+                    setPermissionMode(.autoApprove)
+                    sessionStore.decideApproval(approval, decision: "accept")
                 }
             )
         }

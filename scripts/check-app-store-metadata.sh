@@ -45,8 +45,8 @@ for locale in ("en-US", "zh-Hans"):
             errors.append(f"{metadata_file} contains a third-party product name in the subtitle")
 
 expected_names = {
-    "en-US": "Mimi Remote",
-    "zh-Hans": "咪咪 Console",
+    "en-US": "mimitag",
+    "zh-Hans": "mimitag",
 }
 for locale, expected_name in expected_names.items():
     actual_name = (root / locale / "name.txt").read_text(encoding="utf-8").strip()

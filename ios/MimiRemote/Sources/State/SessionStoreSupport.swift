@@ -252,6 +252,50 @@ struct SessionControlStateStore {
     }
 }
 
+struct SessionAutoApprovalStore {
+    struct Storage: Codable {
+        var byEndpoint: [String: Set<SessionID>] = [:]
+    }
+
+    let defaults: UserDefaults
+    let key: String
+
+    init(defaults: UserDefaults = .standard, key: String = "agentd.sessionAutoApprovals") {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    func load(endpoint: String) -> Set<SessionID> {
+        storage().byEndpoint[normalizedEndpoint(endpoint)] ?? []
+    }
+
+    func save(_ sessionIDs: Set<SessionID>, endpoint: String) {
+        var storage = storage()
+        storage.byEndpoint[normalizedEndpoint(endpoint)] = sessionIDs
+        persist(storage)
+    }
+
+    func storage() -> Storage {
+        guard let data = defaults.data(forKey: key),
+              let decoded = try? JSONDecoder().decode(Storage.self, from: data)
+        else {
+            return Storage()
+        }
+        return decoded
+    }
+
+    func persist(_ storage: Storage) {
+        guard let data = try? JSONEncoder().encode(storage) else {
+            return
+        }
+        defaults.set(data, forKey: key)
+    }
+
+    func normalizedEndpoint(_ endpoint: String) -> String {
+        AgentAPIClient.normalizedEndpoint(endpoint)
+    }
+}
+
 struct SessionReminder: Codable, Equatable, Identifiable {
     let sessionID: SessionID
     var title: String

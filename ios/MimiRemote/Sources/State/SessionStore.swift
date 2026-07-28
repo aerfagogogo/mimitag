@@ -125,6 +125,7 @@ final class SessionStore: ObservableObject {
     @Published var foregroundActivityBySessionID: [SessionID: SessionForegroundActivity] = [:]
     @Published var runtimeActivityBySessionID: [SessionID: RuntimeActivitySnapshot] = [:]
     @Published var sessionControlStateByID: [SessionID: SessionControlState] = [:]
+    @Published var sessionAutoApprovalIDs: Set<SessionID> = []
     @Published var queuedRunningTurnsBySessionID: [SessionID: [QueuedTurnEntry]] = [:]
     @Published var queuedTurnStorageErrorMessage: String?
 
@@ -136,6 +137,7 @@ final class SessionStore: ObservableObject {
     let recentWorkspaceStore: RecentWorkspaceStore
     let sessionListPreferenceStore: SessionListPreferenceStore
     let sessionControlStateStore: SessionControlStateStore
+    let sessionAutoApprovalStore: SessionAutoApprovalStore
     let sessionReminderStore: SessionReminderStore
     let sessionReminderScheduler: any SessionReminderScheduling
     let sessionReminderNow: () -> Date
@@ -286,6 +288,7 @@ final class SessionStore: ObservableObject {
         recentWorkspaceStore: RecentWorkspaceStore? = nil,
         sessionListPreferenceStore: SessionListPreferenceStore? = nil,
         sessionControlStateStore: SessionControlStateStore? = nil,
+        sessionAutoApprovalStore: SessionAutoApprovalStore? = nil,
         sessionReminderStore: SessionReminderStore? = nil,
         historySavingsNoticeStore: HistorySavingsNoticeStore? = nil,
         queuedTurnStore: (any QueuedTurnPersisting)? = nil,
@@ -337,6 +340,14 @@ final class SessionStore: ObservableObject {
             self.sessionControlStateStore = SessionControlStateStore(defaults: defaults)
         } else {
             self.sessionControlStateStore = SessionControlStateStore()
+        }
+        if let sessionAutoApprovalStore {
+            self.sessionAutoApprovalStore = sessionAutoApprovalStore
+        } else if clientFactory != nil {
+            let defaults = UserDefaults(suiteName: "SessionStore.SessionAutoApprovals.\(UUID().uuidString)") ?? .standard
+            self.sessionAutoApprovalStore = SessionAutoApprovalStore(defaults: defaults)
+        } else {
+            self.sessionAutoApprovalStore = SessionAutoApprovalStore()
         }
         if let sessionReminderStore {
             self.sessionReminderStore = sessionReminderStore
@@ -406,6 +417,7 @@ final class SessionStore: ObservableObject {
         self.dismissedHistorySavingsNoticeEndpoints = self.historySavingsNoticeStore.loadDismissedEndpoints()
         reloadSessionListPreferences()
         reloadSessionControlStates()
+        reloadSessionAutoApprovals()
         reloadSessionReminders()
         reloadQueuedTurns()
         self.networkReachabilityStatus = self.networkPathStatusSource.currentStatus

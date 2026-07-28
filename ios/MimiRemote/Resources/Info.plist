@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mimi Remote</string>
+	<string>mimitag</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -24,7 +24,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.gaixianggeng.mimiremote.pairing</string>
+			<string>com.sunyiting.mimitag.pairing</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>mimiremote</string>
@@ -55,13 +55,13 @@
 		</dict>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Allow Mimi Remote to find and connect to a development environment you configure.</string>
+	<string>Allow mimitag to find and connect to a development environment you configure.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Allow Mimi Remote to scan a pairing QR code.</string>
+	<string>Allow mimitag to scan a pairing QR code.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Allow Mimi Remote to turn your speech into text in the message composer.</string>
+	<string>Allow mimitag to turn your speech into text in the message composer.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Allow Mimi Remote to recognize speech and insert it into the message composer.</string>
+	<string>Allow mimitag to recognize speech and insert it into the message composer.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>

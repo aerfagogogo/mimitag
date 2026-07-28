@@ -1,4 +1,4 @@
-# Mimi Remote App Store 提交材料
+# mimitag App Store 提交材料
 
 ## 目标
 
@@ -6,7 +6,7 @@
 
 ## 方案
 
-- App 名称：简体中文 `咪咪 Console`；英文 `Mimi Remote`
+- App 名称：简体中文 `mimitag`；英文 `mimitag`
 - 主类别：`Developer Tools / 开发者工具`
 - 版本：`1.0`
 - 下一个发布构建下限：`100055`；正式归档仍由发布脚本查询 App Store Connect 后选择唯一构建号。

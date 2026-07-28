@@ -81,7 +81,7 @@ struct TeamSendResponse: Codable, Hashable {
 
 struct TeamWorkspaceScope: Hashable {
     static let prefix = "[Mimi 工作区："
-    static let legacyPrefix = "[MimiTag 工作区："
+    static let legacyPrefix = "[mimitag 工作区："
 
     let name: String
     let path: String

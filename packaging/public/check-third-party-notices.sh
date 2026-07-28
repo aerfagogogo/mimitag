@@ -83,8 +83,19 @@ validate_go_module_license() {
 }
 
 go_version="$(go env GOVERSION)"
+go_root="$(go env GOROOT)"
+go_license="$go_root/LICENSE"
+if [[ ! -f "$go_license" && -f "$(dirname "$go_root")/LICENSE" ]]; then
+  # Homebrew Go 1.26+ keeps the Cellar license beside libexec rather than
+  # duplicating it inside GOROOT.
+  go_license="$(dirname "$go_root")/LICENSE"
+fi
+if [[ ! -f "$go_license" ]]; then
+  echo "第三方许可门禁失败：无法定位 $go_version 的 Go LICENSE。" >&2
+  exit 1
+fi
 require_notice_entry "Go standard library/runtime" "$go_version"
-if [[ "$(notice_license_body "Go standard library/runtime" "$go_version")" != "$(cat "$(go env GOROOT)/LICENSE")" ]]; then
+if [[ "$(notice_license_body "Go standard library/runtime" "$go_version")" != "$(cat "$go_license")" ]]; then
   echo "第三方许可门禁失败：Go standard library/runtime $go_version 的许可证正文与当前 Go 工具链不一致。" >&2
   exit 1
 fi

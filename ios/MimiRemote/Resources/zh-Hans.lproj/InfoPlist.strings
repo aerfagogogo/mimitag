@@ -1,5 +1,5 @@
 /* 系统权限弹窗文案。 */
-"CFBundleDisplayName" = "咪咪 Console";
+"CFBundleDisplayName" = "mimitag";
 "NSLocalNetworkUsageDescription" = "用于查找并连接你配置的开发环境。";
 "NSCameraUsageDescription" = "用于扫描配对二维码。";
 "NSMicrophoneUsageDescription" = "用于在消息输入框中将语音转换为文字。";

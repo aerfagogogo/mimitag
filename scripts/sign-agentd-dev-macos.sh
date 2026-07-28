@@ -40,9 +40,9 @@ select_identity() {
   local identities
   local selected
   identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
-  selected="$(printf '%s\n' "$identities" | awk -F'"' '/"Apple Development:/ { print $2; exit }')"
+  selected="$(printf '%s\n' "$identities" | awk '/"Apple Development:/ && $0 !~ /CSSMERR_/ { print $2; exit }')"
   if [[ -z "$selected" ]]; then
-    selected="$(printf '%s\n' "$identities" | awk -F'"' '/"Developer ID Application:/ { print $2; exit }')"
+    selected="$(printf '%s\n' "$identities" | awk '/"Developer ID Application:/ && $0 !~ /CSSMERR_/ { print $2; exit }')"
   fi
   [[ -n "$selected" ]] || fail "未找到 Apple Development 或 Developer ID Application 证书；请先在 Xcode 登录开发者账号"
   printf '%s\n' "$selected"
@@ -65,6 +65,7 @@ main() {
   local identifier="${MIMI_AGENTD_CODE_IDENTIFIER:-$DEFAULT_CODE_IDENTIFIER}"
   local file_details
   local identities
+  local identity_line
   local requirement
   local signing_details
   [[ -f "$binary" && ! -L "$binary" ]] || fail "目标必须是普通文件：$binary"
@@ -77,11 +78,12 @@ main() {
     identity="$(select_identity)"
   fi
   identities="$(security find-identity -v -p codesigning)"
-  grep -Fq "\"${identity}\"" <<<"$identities" \
+  identity_line="$(printf '%s\n' "$identities" | awk -v identity="$identity" '$2 == identity || index($0, "\"" identity "\"") { print; exit }')"
+  [[ -n "$identity_line" && "$identity_line" != *"CSSMERR_"* ]] \
     || fail "指定的签名 identity 不存在或无效：$identity"
 
   local timestamp=(--timestamp=none)
-  if [[ "$identity" == Developer\ ID\ Application:* ]]; then
+  if [[ "$identity_line" == *"\"Developer ID Application:"* ]]; then
     timestamp=(--timestamp)
   fi
   codesign --force --options runtime "${timestamp[@]}" \

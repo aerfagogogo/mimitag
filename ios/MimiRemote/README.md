@@ -1,8 +1,8 @@
-# Mimi Remote iOS App
+# mimitag iOS App
 
 ## Build from source (English)
 
-Mimi Remote is a native iPhone/iPad client for coding agents running on your own Mac. It requires iOS/iPadOS 26 or later, Xcode 26 or later with the iOS 26 SDK, and XcodeGen; there is no public App Store release. From the repository root, install XcodeGen, then generate and open the project:
+mimitag is a native iPhone/iPad client for coding agents running on your own Mac. It requires iOS/iPadOS 26 or later, Xcode 26 or later with the iOS 26 SDK, and XcodeGen; there is no public App Store release. From the repository root, install XcodeGen, then generate and open the project:
 
 ```bash
 brew install xcodegen
@@ -30,7 +30,7 @@ The detailed engineering and operational reference below is currently in Chinese
 
 ## 目标
 
-Mimi Remote 是原生 iPhone / iPad SwiftUI 控制台。`MimiRemote` 只保留为 Xcode target、scheme 和源码目录名，不作为用户侧产品名。
+mimitag 是原生 iPhone / iPad SwiftUI 控制台。`MimiRemote` 只保留为 Xcode target、scheme 和源码目录名，不作为用户侧产品名。
 
 目标主链路是 iPhone / iPad App 直接消费 Codex app-server JSON-RPC 协议；Mac 上的 `agentd` 只负责项目 allowlist、鉴权、健康诊断、app-server 启动和可选薄网关。这个 App 是独立第三方客户端，不隶属于 OpenAI，也不是任何商业产品的免费替代品。
 

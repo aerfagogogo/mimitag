@@ -10,7 +10,7 @@ Go 依赖版本以 `go.mod`、`go.sum` 为准；源码树包含 iOS 客户端时
 
 | 依赖 | 版本 | 使用范围 |
 | --- | --- | --- |
-| `Go standard library/runtime` | `go1.25.0` | Go 运行时 |
+| `Go standard library/runtime` | `go1.26.5` | Go 运行时 |
 | `github.com/creack/pty` | `v1.1.24` | Go 运行时 |
 | `github.com/gorilla/websocket` | `v1.5.3` | Go 运行时 |
 | `github.com/skip2/go-qrcode` | `v0.0.0-20200617195104-da1b6568686e` | Go 运行时 |
@@ -26,7 +26,7 @@ Go 依赖版本以 `go.mod`、`go.sum` 为准；源码树包含 iOS 客户端时
 
 ## 许可证正文
 
-### Go standard library/runtime go1.25.0
+### Go standard library/runtime go1.26.5
 
 使用范围：Go 运行时
 

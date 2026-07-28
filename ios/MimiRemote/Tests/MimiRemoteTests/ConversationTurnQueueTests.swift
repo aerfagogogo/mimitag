@@ -1613,6 +1613,108 @@ extension ConversationDataFlowTests {
         })
     }
 
+    func testSessionAutoApprovalAcceptsCurrentAndLaterApprovalRequests() async throws {
+        let project = makeProject(id: "proj_session_auto_approval")
+        let running = makeSession(
+            id: "sess_session_auto_approval",
+            projectID: project.id,
+            title: "自动审批会话",
+            status: "running",
+            source: "claude",
+            runtimeProvider: "claude"
+        )
+        let appStore = AppStore()
+        appStore.token = "test-token"
+        var sockets: [MockWebSocketClient] = []
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: {
+                MockSessionStoreClient(projects: [project], sessions: [running])
+            },
+            webSocketFactory: {
+                let socket = MockWebSocketClient()
+                sockets.append(socket)
+                return socket
+            }
+        )
+
+        await store.refreshAll(autoAttach: false)
+        store.takeOverSession(running)
+        await store.selectSession(running)
+        XCTAssertEqual(sockets.count, 1)
+        sockets[0].emitStatus(.connected)
+        try await waitForWebSocketStatus(.connected, store: store)
+        store.setSessionAutoApproval(true, sessionID: running.id)
+
+        let first = AgentApprovalRequest(
+            id: "auto-approval-1",
+            title: "执行第一条高风险命令",
+            body: "first-command",
+            kind: "command",
+            risk: "high"
+        )
+        sockets[0].emitEvent(.approvalRequest(
+            first,
+            AgentEventMetadata(
+                seq: 31,
+                sessionID: running.id,
+                turnID: "turn-auto",
+                itemID: first.id,
+                messageID: nil,
+                clientMessageID: nil,
+                revision: nil,
+                createdAt: nil
+            )
+        ))
+        for _ in 0..<80 where sockets[0].sentApprovals.count < 1 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(sockets[0].sentApprovals.first?.approvalID, first.id)
+        XCTAssertEqual(sockets[0].sentApprovals.first?.decision, "accept")
+
+        sockets[0].emitEvent(.approvalResolved(AgentEventMetadata(
+            seq: 32,
+            sessionID: running.id,
+            turnID: "turn-auto",
+            itemID: first.id,
+            messageID: nil,
+            clientMessageID: nil,
+            revision: nil,
+            createdAt: nil
+        )))
+
+        let second = AgentApprovalRequest(
+            id: "auto-approval-2",
+            title: "执行第二条高风险命令",
+            body: "second-command",
+            kind: "command",
+            risk: "high"
+        )
+        sockets[0].emitEvent(.approvalRequest(
+            second,
+            AgentEventMetadata(
+                seq: 33,
+                sessionID: running.id,
+                turnID: "turn-auto",
+                itemID: second.id,
+                messageID: nil,
+                clientMessageID: nil,
+                revision: nil,
+                createdAt: nil
+            )
+        ))
+        for _ in 0..<80 where sockets[0].sentApprovals.count < 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(sockets[0].sentApprovals.last?.approvalID, second.id)
+        XCTAssertEqual(sockets[0].sentApprovals.last?.decision, "accept")
+        XCTAssertTrue(store.isSessionAutoApprovalEnabled(sessionID: running.id))
+    }
+
     func testClaudeApprovalRequestUsesSharedRuntimeNotificationPipeline() async throws {
         let project = makeProject(id: "proj_claude_approval_notice")
         let running = makeSession(

@@ -18,11 +18,11 @@ struct MimiRemoteMacApp: App {
         } label: {
             // 菜单栏使用稳定的品牌标记，服务状态交由弹窗内的语义图标表达。
             MimiMenuBarMark()
-                .accessibilityLabel("Mimi Remote Mac：\(store.lifecycle.title)")
+                .accessibilityLabel("mimitag：\(store.lifecycle.title)")
         }
         .menuBarExtraStyle(.window)
 
-        Window("Mimi Remote Mac", id: AppWindow.dashboard.rawValue) {
+        Window("mimitag", id: AppWindow.dashboard.rawValue) {
             DashboardView(store: store)
         }
         .defaultSize(width: 560, height: 520)

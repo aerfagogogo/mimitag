@@ -54,7 +54,9 @@ struct PendingApprovalActionCard: View {
     let approval: ApprovalSummary
     let runtimePresentation: SessionRuntimePresentation
     let isSendingDecision: Bool
+    let isSessionAutoApprovalEnabled: Bool
     let onDecision: (String) -> Void
+    let onEnableSessionAutoApproval: () -> Void
 
     @State private var persistentGrant: PersistentPermissionGrant?
     @State private var isDetailsExpanded = false
@@ -332,6 +334,37 @@ struct PendingApprovalActionCard: View {
             .disabled(isSendingDecision || !approval.hasDecisionContext)
             .accessibilityIdentifier("approval.alwaysAllow")
             .accessibilityHint(L10n.text("ui.after_confirmation_write_the_precise_rules_suggested_by"))
+        }
+
+        if !isSessionAutoApprovalEnabled {
+            Button {
+                onEnableSessionAutoApproval()
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "bolt.shield.fill")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.text("ui.auto_approve_this_session"))
+                            .font(themeStore.uiFont(.subheadline, weight: .semibold))
+                        Text(L10n.text("ui.auto_approve_this_session_detail"))
+                            .font(themeStore.uiFont(.caption))
+                            .foregroundStyle(tokens.secondaryText)
+                    }
+                    Spacer(minLength: 8)
+                }
+                .foregroundStyle(tokens.success)
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity, minHeight: 54)
+                .background(tokens.success.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(tokens.success.opacity(0.32), lineWidth: 1)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
+            .disabled(isSendingDecision || !approval.hasDecisionContext)
+            .accessibilityIdentifier("approval.autoApproveSession")
+            .accessibilityHint(L10n.text("ui.auto_approve_this_session_detail"))
         }
     }
 

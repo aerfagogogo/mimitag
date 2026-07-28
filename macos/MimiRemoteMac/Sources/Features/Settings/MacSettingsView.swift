@@ -33,7 +33,7 @@ struct MacSettingsView: View {
             }
 
             Section("隐私") {
-                Text("Mimi Remote Mac 不上传日志、代码、Token 或使用数据。长期 Token 只保存在 agentd 的私有配置中，App 只处理短期配对票据。")
+                Text("mimitag 不上传日志、代码、Token 或使用数据。长期 Token 只保存在 agentd 的私有配置中，App 只处理短期配对票据。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -54,7 +54,7 @@ struct MacSettingsView: View {
     private var ownerTitle: String {
         switch store.owner {
         case .none: "未运行"
-        case .macApp: "Mimi Remote Mac"
+        case .macApp: "mimitag"
         case .homebrew: "Homebrew"
         }
     }

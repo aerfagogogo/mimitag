@@ -1,15 +1,19 @@
 # 个人版本维护说明
 
-## 只需要记住两条分支
+## 只需要记住两个文件夹
 
-- `author/main`：原作者代码镜像，只跟踪 `upstream/main`，不放个人签名和个人修改。
-- `personal/stable`：自己的稳定版本。平时编译、安装和测试都使用这条分支。
+- `/Users/sunyiting/code/codex-ipad-agent`：原作者代码镜像，只跟踪
+  `upstream/main`，不放个人签名和个人修改。
+- `/Users/sunyiting/code/mimitag`：自己的修改版。平时编译、安装和测试都使用
+  这里的 `personal/stable` 分支。
 
 当前个人版本使用：
 
 - Apple Team：`CHK3SLQ5JM`
+- 主屏显示名：`MimiTag`
 - App Bundle ID：`com.sunyiting.mimiremote`
 - Tests Bundle ID：`com.sunyiting.mimiremoteTests`
+- UI Tests Bundle ID：`com.sunyiting.mimiremoteUITests`
 
 `ios/MimiRemote/project.yml` 是签名和 Bundle ID 的配置来源；重新生成 Xcode
 工程时要同时保留它，不能只改 `.xcodeproj`。
@@ -25,19 +29,22 @@ git switch personal/stable
 
 ## 跟进原作者更新
 
-先让原作者分支快进到最新版：
+先在原作者镜像中获取并快进到最新版：
 
 ```bash
+cd /Users/sunyiting/code/codex-ipad-agent
 git fetch upstream
-git switch author/main
+git switch main
 git merge --ff-only upstream/main
 ```
 
-确认原作者版本后，再把它合入个人稳定版：
+确认原作者版本后，再在个人仓库中合入上游：
 
 ```bash
+cd /Users/sunyiting/code/mimitag
+git fetch upstream
 git switch personal/stable
-git merge author/main
+git merge upstream/main
 ```
 
 如果合并出现冲突，先停止，不要用强制覆盖命令。个人签名、Bundle ID 和断线恢复

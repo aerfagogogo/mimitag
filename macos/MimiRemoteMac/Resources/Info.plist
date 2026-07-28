@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mimi Remote Mac</string>
+	<string>mimitag</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -34,6 +34,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>允许 Mimi Remote Mac 在本机和私有网络中启动并检查远程开发服务。</string>
+	<string>允许 mimitag 在本机和私有网络中启动并检查远程开发服务。</string>
 </dict>
 </plist>

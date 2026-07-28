@@ -2455,7 +2455,7 @@ extension ConversationDataFlowTests {
         {
           "id": "sess_1",
           "project_id": "proj_1",
-          "project": "Mimi Remote",
+          "project": "mimitag",
           "dir": "/tmp/project",
           "title": "数据流测试",
           "status": "running",

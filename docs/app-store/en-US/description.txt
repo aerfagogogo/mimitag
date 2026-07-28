@@ -1,4 +1,4 @@
-Mimi Remote is a native mobile developer console for a computer you own or are authorized to use.
+mimitag is a native mobile developer console for a computer you own or are authorized to use.
 
 Connect to your development environment, start or resume coding sessions, review changes, and confirm restricted actions while all commands continue to run on the computer you control.
 
@@ -11,11 +11,11 @@ Features:
 - Keep separate connection profiles for different computers
 - Connect over a local network, private network, or HTTPS
 
-Mimi Remote communicates directly with the host you configure. The app does not download or execute code on the mobile device and does not provide models, third-party accounts, subscriptions, cloud code execution, a VPN, traffic relay, or hosted project storage. Project content and connection credentials are not sent to the Mimi Remote developer.
+mimitag communicates directly with the host you configure. The app does not download or execute code on the mobile device and does not provide models, third-party accounts, subscriptions, cloud code execution, a VPN, traffic relay, or hosted project storage. Project content and connection credentials are not sent to the mimitag developer.
 
 Requirements:
 - A computer with the Mimi companion service and a compatible developer runtime installed
 - Network access from the mobile device to that computer
 - Access only to devices and projects you own or are explicitly authorized to use
 
-Mimi Remote is independently developed and open source. It is not affiliated with or endorsed by providers of compatible tools.
+mimitag is independently developed and open source. It is not affiliated with or endorsed by providers of compatible tools.

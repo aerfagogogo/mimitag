@@ -161,7 +161,7 @@ enum AgentClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .embeddedBinaryMissing:
-            "App 内没有找到 agentd，请重新构建或安装 Mimi Remote Mac。"
+            "App 内没有找到 agentd，请重新构建或安装 mimitag。"
         case .commandFailed(let detail):
             detail.isEmpty ? "agentd 命令执行失败" : detail
         case .invalidResponse(let detail):

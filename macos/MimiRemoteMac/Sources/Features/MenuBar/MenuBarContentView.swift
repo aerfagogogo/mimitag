@@ -164,7 +164,7 @@ struct MenuBarContentView: View {
         // 使用 AppKit 的应用级确认框，既符合 macOS 习惯，也能稳定地把结果交给全局 Store。
         DispatchQueue.main.async {
             let alert = NSAlert()
-            alert.messageText = "退出并停止 Mimi Remote Mac？"
+            alert.messageText = "退出并停止 mimitag？"
             alert.informativeText = "这会立即中断 iPhone 和 iPad 的连接。下次打开 App 或重新登录 Mac 时会重新启动服务。"
             alert.alertStyle = .warning
             alert.addButton(withTitle: "退出并停止")
@@ -182,7 +182,7 @@ struct MenuBarContentView: View {
     }
 
     private var primaryActionTitle: String {
-        store.lifecycle == .notConfigured ? "完成首次设置…" : "迁移到 Mimi Remote Mac…"
+        store.lifecycle == .notConfigured ? "完成首次设置…" : "迁移到 mimitag…"
     }
 
     private var primaryActionSymbol: String {
@@ -248,8 +248,8 @@ private struct MenuStatusHeader: View {
         case .loading: "正在检查 Mac 服务"
         case .notConfigured: "完成 Mac 端设置"
         case .migrationRequired: "Homebrew 服务正在运行"
-        case .starting: "正在启动 Mimi Remote"
-        case .ready: "Mimi Remote 已连接"
+        case .starting: "正在启动 mimitag"
+        case .ready: "mimitag 已连接"
         case .degraded: "服务需要处理"
         case .stopped: "服务已停止"
         case .failed: "服务启动失败"

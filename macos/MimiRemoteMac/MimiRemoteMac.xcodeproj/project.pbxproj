@@ -479,7 +479,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaixianggeng.mimi.macTests;
 				SDKROOT = macosx;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Mimi Remote Mac.app/Contents/MacOS/Mimi Remote Mac";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/mimitag.app/Contents/MacOS/mimitag";
 			};
 			name = Release;
 		};
@@ -499,7 +499,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaixianggeng.mimi.mac;
 				PRODUCT_MODULE_NAME = MimiRemoteMac;
-				PRODUCT_NAME = "Mimi Remote Mac";
+				PRODUCT_NAME = "mimitag";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -576,7 +576,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaixianggeng.mimi.macTests;
 				SDKROOT = macosx;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Mimi Remote Mac.app/Contents/MacOS/Mimi Remote Mac";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/mimitag.app/Contents/MacOS/mimitag";
 			};
 			name = Debug;
 		};
@@ -596,7 +596,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaixianggeng.mimi.mac;
 				PRODUCT_MODULE_NAME = MimiRemoteMac;
-				PRODUCT_NAME = "Mimi Remote Mac";
+				PRODUCT_NAME = "mimitag";
 				SDKROOT = macosx;
 			};
 			name = Release;

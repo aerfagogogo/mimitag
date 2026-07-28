@@ -1,4 +1,4 @@
-# Mimi Remote Mac
+# mimitag
 
 ## 目标
 
@@ -47,13 +47,13 @@ bash macos/MimiRemoteMac/Scripts/build-local.sh
 
 ```bash
 bash macos/MimiRemoteMac/Scripts/install-local.sh
-open "$HOME/Applications/Mimi Remote Mac.app"
+open "$HOME/Applications/mimitag.app"
 ```
 
 也可以显式安装到系统 Applications；目录不可写时 macOS 会要求在终端中自行使用有权限的账户操作：
 
 ```bash
-bash macos/MimiRemoteMac/Scripts/install-local.sh "/Applications/Mimi Remote Mac.app"
+bash macos/MimiRemoteMac/Scripts/install-local.sh "/Applications/mimitag.app"
 ```
 
 ### 正式安装包

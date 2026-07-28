@@ -3,21 +3,21 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
-source_app="$repo_root/.build/MimiRemoteMac/Build/Products/Release/Mimi Remote Mac.app"
+source_app="$repo_root/.build/MimiRemoteMac/Build/Products/Release/mimitag.app"
 
 # Default to wherever the app is already installed. Picking a fixed default
 # instead is how a rebuild silently lands beside the running copy: the new
 # version installs, the login item keeps launching agentd out of the old
 # bundle, and everything looks deployed while none of it is.
 default_destination() {
-  local candidates=("/Applications/Mimi Remote Mac.app" "$HOME/Applications/Mimi Remote Mac.app")
+  local candidates=("/Applications/mimitag.app" "$HOME/Applications/mimitag.app")
   local found=()
   local candidate
   for candidate in "${candidates[@]}"; do
     [[ -d "$candidate" ]] && found+=("$candidate")
   done
   case ${#found[@]} in
-    0) printf '%s\n' "$HOME/Applications/Mimi Remote Mac.app" ;;
+    0) printf '%s\n' "$HOME/Applications/mimitag.app" ;;
     1) printf '%s\n' "${found[0]}" ;;
     *)
       echo "检测到多处已安装，请显式指定目标：" >&2
@@ -38,18 +38,18 @@ destination_parent="$(dirname "$destination")"
 if [[ ! -d "$source_app" ]]; then
   CONFIGURATION=Release bash "$script_dir/build-local.sh"
 fi
-if [[ "$(basename "$destination")" != "Mimi Remote Mac.app" ]]; then
-  echo "安装目标必须以 Mimi Remote Mac.app 结尾：$destination" >&2
+if [[ "$(basename "$destination")" != "mimitag.app" ]]; then
+  echo "安装目标必须以 mimitag.app 结尾：$destination" >&2
   exit 2
 fi
-if pgrep -x "Mimi Remote Mac" >/dev/null 2>&1; then
-  echo "请先从菜单栏退出 Mimi Remote Mac，再重新安装。" >&2
+if pgrep -x "mimitag" >/dev/null 2>&1; then
+  echo "请先从菜单栏退出 mimitag，再重新安装。" >&2
   exit 1
 fi
 
 mkdir -p "$destination_parent"
 staging_dir="$(mktemp -d "$destination_parent/.mimi-remote-install.XXXXXX")"
-staged_app="$staging_dir/Mimi Remote Mac.app"
+staged_app="$staging_dir/mimitag.app"
 backup_app=""
 cleanup() {
   rm -rf -- "$staging_dir"
@@ -60,7 +60,7 @@ trap cleanup EXIT
 /usr/bin/codesign --verify --deep --strict "$staged_app"
 
 if [[ -e "$destination" ]]; then
-  backup_app="$destination_parent/Mimi Remote Mac.backup-$(date +%Y%m%d-%H%M%S).app"
+  backup_app="$destination_parent/mimitag.backup-$(date +%Y%m%d-%H%M%S).app"
   mv "$destination" "$backup_app"
 fi
 

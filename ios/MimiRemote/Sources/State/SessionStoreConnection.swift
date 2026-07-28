@@ -737,6 +737,14 @@ extension SessionStore {
             updateSession(id) { item in
                 item.pendingApproval = approval
             }
+            if let approval,
+               sessionAutoApprovalIDs.contains(id),
+               selectedSessionID == id {
+                // “本会话自动批准”只在用户显式开启的会话内生效。审批事件已经通过
+                // 当前会话 WebSocket 到达，因此这里沿用同一条受控决策通道，不修改
+                // Claude/Codex 的全局权限配置，也不会扩散到其他项目或会话。
+                decideApproval(approval, decision: "accept")
+            }
         }
         for (id, userInput) in output.pendingUserInputUpdates {
             if userInput == nil {
@@ -1105,6 +1113,7 @@ extension SessionStore {
         setRecentWorkspacesIfChanged(recentWorkspaceStore.load(endpoint: appStore.endpoint))
         reloadSessionListPreferences()
         reloadSessionControlStates()
+        reloadSessionAutoApprovals()
         reloadSessionReminders()
     }
 
@@ -1188,6 +1197,38 @@ extension SessionStore {
         }
         sessionControlStateByID[sessionID] = state
         saveSessionControlStates()
+    }
+
+    func reloadSessionAutoApprovals() {
+        let sessionIDs = sessionAutoApprovalStore.load(endpoint: appStore.endpoint)
+        guard sessionAutoApprovalIDs != sessionIDs else {
+            return
+        }
+        sessionAutoApprovalIDs = sessionIDs
+    }
+
+    func saveSessionAutoApprovals() {
+        sessionAutoApprovalStore.save(sessionAutoApprovalIDs, endpoint: appStore.endpoint)
+    }
+
+    func setSessionAutoApproval(_ enabled: Bool, sessionID: SessionID) {
+        let changed: Bool
+        if enabled {
+            changed = sessionAutoApprovalIDs.insert(sessionID).inserted
+        } else {
+            changed = sessionAutoApprovalIDs.remove(sessionID) != nil
+        }
+        guard changed else {
+            return
+        }
+        saveSessionAutoApprovals()
+    }
+
+    func isSessionAutoApprovalEnabled(sessionID: SessionID?) -> Bool {
+        guard let sessionID else {
+            return false
+        }
+        return sessionAutoApprovalIDs.contains(sessionID)
     }
 
     func reloadSessionReminders() {
@@ -1671,6 +1712,7 @@ extension SessionStore {
         listProjectionBySessionID = [:]
         recentActivityProjectionBySessionID = [:]
         reloadSessionControlStates()
+        reloadSessionAutoApprovals()
         foregroundActivityBySessionID = [:]
         runtimeActivityBySessionID = [:]
         locallyCompletedSessionIDs = []

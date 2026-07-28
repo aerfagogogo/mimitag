@@ -246,7 +246,7 @@ final class HostStore {
 
     private func localNetworkPairing() async throws -> PairingInfo {
         guard owner == .macApp else {
-            throw AgentClientError.commandFailed("请先将 Homebrew 服务迁移到 Mimi Remote Mac，再启用局域网访问。")
+            throw AgentClientError.commandFailed("请先将 Homebrew 服务迁移到 mimitag，再启用局域网访问。")
         }
         let configuration = try await agent.setLANAccess(true)
         var restartedForLAN = false
@@ -414,7 +414,7 @@ final class HostStore {
             }
         case .requiresApproval:
             owner = .none
-            lifecycle = .degraded("请在系统设置的登录项中允许 Mimi Remote Mac。")
+            lifecycle = .degraded("请在系统设置的登录项中允许 mimitag。")
         case .notFound:
             owner = .none
             lifecycle = .failed("App 内缺少 LaunchAgent 配置，请重新安装。")
@@ -510,7 +510,7 @@ final class HostStore {
                 fail(error)
             }
         case .requiresApproval:
-            lifecycle = .degraded("请在系统设置的登录项中允许 Mimi Remote Mac。")
+            lifecycle = .degraded("请在系统设置的登录项中允许 mimitag。")
         case .notRegistered:
             lifecycle = .stopped
         case .notFound:
@@ -846,7 +846,7 @@ private enum ServiceLifecycleError: LocalizedError {
         case .stopTimedOut:
             "旧服务仍占用当前 Endpoint，未继续启动新版本；请稍后重试。"
         case .requiresApproval:
-            "请先在系统设置的登录项中允许 Mimi Remote Mac。"
+            "请先在系统设置的登录项中允许 mimitag。"
         case .agentNotFound:
             "App 内缺少 LaunchAgent 配置，请重新安装。"
         }

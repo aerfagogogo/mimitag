@@ -1,16 +1,16 @@
-# 咪咪 Console / Mimi Remote 中国大陆提交清单
+# mimitag / mimitag 中国大陆提交清单
 
 ## 目标
 
-在不隐藏真实功能、不冒充第三方官方产品的前提下，把咪咪 Console / Mimi Remote 作为“连接用户自有计算机的自托管开发工作台”提交到中国大陆 App Store。
+在不隐藏真实功能、不冒充第三方官方产品的前提下，把mimitag / mimitag 作为“连接用户自有计算机的自托管开发工作台”提交到中国大陆 App Store。
 
-KittyLitter 已在中国大陆商店提供，说明“移动端连接用户自有开发运行时”这一产品形态存在审核先例；但不同账号主体、二进制、元数据和审核批次不能互相替代，本清单仍以 Mimi Remote 的历史拒绝信息和当前实现为准。
+KittyLitter 已在中国大陆商店提供，说明“移动端连接用户自有开发运行时”这一产品形态存在审核先例；但不同账号主体、二进制、元数据和审核批次不能互相替代，本清单仍以 mimitag 的历史拒绝信息和当前实现为准。
 
 ## 方案
 
 ### 1. 产品与品牌
 
-- [x] App 名称使用独立品牌：简体中文 `咪咪 Console`，英文 `Mimi Remote`。
+- [x] App 名称使用独立品牌：简体中文 `mimitag`，英文 `mimitag`。
 - [x] 副标题不使用 Mac、iPhone、iPad、ChatGPT、OpenAI 或其他第三方产品名。
 - [x] 公开推广文本、描述和关键词不使用 ChatGPT/OpenAI 名称。
 - [ ] 当前开发版本已恢复运行时识别图标；再次提交中国大陆审核前，应根据最新审核反馈决定是否切回中性系统符号并重拍截图。
@@ -25,7 +25,7 @@ README 当前四张实机图仅保留为研发记录，不进入中国大陆商�
 
 ### 2. App Store Connect
 
-- [ ] 核对 App Store Connect 名称为简体中文 `咪咪 Console`、英文 `Mimi Remote`，与本地元数据和本地化显示名称一致。
+- [ ] 核对 App Store Connect 名称为简体中文 `mimitag`、英文 `mimitag`，与本地元数据和本地化显示名称一致。
 - [ ] 粘贴 `zh-Hans/` 与 `en-US/` 中的新元数据。
 - [ ] 技术支持 URL 更新为 `https://github.com/gaixianggeng/mimi-remote/blob/main/docs/support.md`。
 - [ ] 隐私政策 URL 更新为 `https://github.com/gaixianggeng/mimi-remote/blob/main/docs/privacy-policy.md`。
@@ -35,7 +35,7 @@ README 当前四张实机图仅保留为研发记录，不进入中国大陆商�
 - [ ] 把审核专用 HTTPS Endpoint、Token、有效时间和联系人填入审核信息。
 - [ ] 上传新的 2–3 分钟审核视频，展示手动连接、样例工作区、会话、Diff/确认和隐私入口。
 - [ ] 保持“手动发布”，通过审核后再决定上线时间。
-- [ ] 回答 2026 年新增的社交媒体年龄分级问题；Mimi Remote 不提供用户间社交、公开内容流或匿名聊天。
+- [ ] 回答 2026 年新增的社交媒体年龄分级问题；mimitag 不提供用户间社交、公开内容流或匿名聊天。
 - [ ] 核对出口合规、内容权利和 App 隐私；当前目标值为“不使用受限加密文档”“开发者不收集数据”。
 
 ### 3. 中国大陆合规

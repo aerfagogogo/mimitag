@@ -352,7 +352,7 @@ struct ShareJourneyCard: View {
             .frame(width: 28 * scale, height: 28 * scale)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("Mimi Remote")
+                Text("mimitag")
                     .font(.system(size: 10 * scale, weight: .bold, design: .rounded))
                     .tracking(1.15 * scale)
                     .textCase(.uppercase)

@@ -715,7 +715,7 @@ struct UnifiedWorkbenchShell: View {
 
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Mimi Remote")
+                            Text("mimitag")
                                 .font(themeStore.uiFont(.headline, weight: .semibold))
                                 .foregroundStyle(tokens.primaryText)
                                 .lineLimit(1)

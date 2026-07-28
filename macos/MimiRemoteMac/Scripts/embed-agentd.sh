@@ -27,13 +27,13 @@ find_go() {
 
 go_binary="$(find_go || true)"
 if [[ -z "$go_binary" ]]; then
-  echo "Mimi Remote Mac 构建失败：未找到可用 Go 工具链。" >&2
+  echo "mimitag 构建失败：未找到可用 Go 工具链。" >&2
   exit 1
 fi
 
 go_version="$(GOTOOLCHAIN=local "$go_binary" env GOVERSION)"
 if [[ "$go_version" != go1.25.* ]]; then
-  echo "Mimi Remote Mac 构建失败：agentd 需要 Go 1.25，当前为 ${go_version}。" >&2
+  echo "mimitag 构建失败：agentd 需要 Go 1.25，当前为 ${go_version}。" >&2
   exit 1
 fi
 
@@ -54,7 +54,7 @@ for architecture in "${architectures[@]}"; do
     arm64) go_arch=arm64 ;;
     x86_64) go_arch=amd64 ;;
     *)
-      echo "Mimi Remote Mac 构建失败：不支持架构 ${architecture}。" >&2
+      echo "mimitag 构建失败：不支持架构 ${architecture}。" >&2
       exit 1
       ;;
   esac
@@ -92,7 +92,7 @@ find_cargo() {
 
 cargo_binary="$(find_cargo || true)"
 if [[ -z "$cargo_binary" ]]; then
-  echo "Mimi Remote Mac 构建失败：未找到 cargo，无法构建随包 Claude bridge。" >&2
+  echo "mimitag 构建失败：未找到 cargo，无法构建随包 Claude bridge。" >&2
   echo "安装 Rust 工具链后重试：https://rustup.rs" >&2
   exit 1
 fi
@@ -113,7 +113,7 @@ for architecture in "${architectures[@]}"; do
     --package alleycat-claude-bridge --bin alleycat-claude-bridge \
     --target "$rust_target" \
     --target-dir "$build_dir/rust"; then
-    echo "Mimi Remote Mac 构建失败：无法为 $rust_target 构建 Claude bridge。" >&2
+    echo "mimitag 构建失败：无法为 $rust_target 构建 Claude bridge。" >&2
     echo "缺少目标时先安装：rustup target add $rust_target" >&2
     exit 1
   fi

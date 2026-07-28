@@ -1,244 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "ui.agent" : {
-      "comment" : "Fallback display name for an AI agent.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agent"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agent"
-          }
-        }
-      }
-    },
-    "ui.agent_team" : {
-      "comment" : "Title for the optional local multi-agent collaboration view.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agent team"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agent 团队"
-          }
-        }
-      }
-    },
-    "ui.agent_team_subtitle" : {
-      "comment" : "Explains that the team view uses the optional local OpenTag service.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Collaborate with local agents through OpenTag"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "通过 OpenTag 与本地 Agent 协作"
-          }
-        }
-      }
-    },
-    "ui.choose_workspace_context" : {
-      "comment" : "Accessibility label for choosing a workspace to attach to a team message.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose workspace context"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择工作区上下文"
-          }
-        }
-      }
-    },
-    "ui.no_team_messages" : {
-      "comment" : "Empty-state title in the agent team conversation.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No team messages yet"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "还没有团队消息"
-          }
-        }
-      }
-    },
-    "ui.no_team_messages_description" : {
-      "comment" : "Empty-state guidance in the agent team conversation.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mention one or more agents to start collaborating."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "@ 一个或多个 Agent 开始协作。"
-          }
-        }
-      }
-    },
-    "ui.no_workspace_context" : {
-      "comment" : "Menu option that sends a team message without a workspace envelope.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No workspace context"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不附带工作区"
-          }
-        }
-      }
-    },
-    "ui.open_agent_team" : {
-      "comment" : "Accessibility label for opening the optional agent team view.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open agent team"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开 Agent 团队"
-          }
-        }
-      }
-    },
-    "ui.team" : {
-      "comment" : "Short navigation title for the optional agent team view.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Team"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "团队"
-          }
-        }
-      }
-    },
-    "ui.team_message_placeholder" : {
-      "comment" : "Placeholder in the team message composer.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Message @codex, @claude…"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "给 @codex、@claude… 发消息"
-          }
-        }
-      }
-    },
-    "ui.team_same_message_hint" : {
-      "comment" : "Hint explaining that a team message can mention multiple agents.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "One message can mention multiple agents"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "一条消息可以 @ 多个 Agent"
-          }
-        }
-      }
-    },
-    "ui.team_workspace_context_value" : {
-      "comment" : "Shows which workspace will be attached to the next team message. The argument is a workspace name.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Workspace context: %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "将附带工作区：%@"
-          }
-        }
-      }
-    },
-    "ui.workspace_context" : {
-      "comment" : "Label for the workspace context selector in the team view.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Workspace context"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "工作区上下文"
-          }
-        }
-      }
-    },
-    "ui.you" : {
-      "comment" : "Display name for messages sent by the current user.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "You"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "你"
-          }
-        }
-      }
-    },
     "?" : {
       "comment" : "A placeholder text that can be displayed in place of a progress ring when the user's usage is unknown.",
       "isCommentAutoGenerated" : true,
@@ -339,19 +101,19 @@
     "let theme = ThemePreset.%@" : {
       "shouldTranslate" : false
     },
-    "Mimi Remote" : {
+    "mimitag" : {
       "comment" : "Localized product display name used in the app chrome.",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote"
+            "value" : "mimitag"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "咪咪 Console"
+            "value" : "mimitag"
           }
         }
       }
@@ -1225,7 +987,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After refreshing, Mimi Remote shows the rate-limit window reported by Codex."
+            "value" : "After refreshing, mimitag shows the rate-limit window reported by Codex."
           }
         },
         "zh-Hans" : {
@@ -1243,7 +1005,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After refreshing, Mimi Remote shows the rate-limit window reported by %@."
+            "value" : "After refreshing, mimitag shows the rate-limit window reported by %@."
           }
         },
         "zh-Hans" : {
@@ -1303,6 +1065,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开启后，下一回合将使用优先服务速度。"
+          }
+        }
+      }
+    },
+    "ui.agent" : {
+      "comment" : "Fallback display name for an AI agent.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent"
           }
         }
       }
@@ -1388,6 +1167,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agent 请求修改文件"
+          }
+        }
+      }
+    },
+    "ui.agent_team" : {
+      "comment" : "Title for the optional local multi-agent collaboration view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 团队"
+          }
+        }
+      }
+    },
+    "ui.agent_team_subtitle" : {
+      "comment" : "Explains that the team view uses the optional local OpenTag service.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collaborate with local agents through OpenTag"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过 OpenTag 与本地 Agent 协作"
           }
         }
       }
@@ -1598,6 +1411,7 @@
     },
     "ui.ai_usage" : {
       "comment" : "Settings section title grouping account usage for supported AI runtimes.",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2507,6 +2321,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动批准低风险操作"
+          }
+        }
+      }
+    },
+    "ui.auto_approve_this_session" : {
+      "comment" : "A button that enables automatic acceptance of all approval requests for only the current agent session.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto-approve This Session"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本会话自动批准"
+          }
+        }
+      }
+    },
+    "ui.auto_approve_this_session_detail" : {
+      "comment" : "Explains that session auto-approval includes high-risk requests but does not alter global security settings.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accept this and later requests, including high-risk ones, without changing global settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动通过当前及后续审批（含高风险），不修改全局安全设置。"
           }
         }
       }
@@ -3923,6 +3771,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "为新任务选择合适的模型"
+          }
+        }
+      }
+    },
+    "ui.choose_workspace_context" : {
+      "comment" : "Accessibility label for choosing a workspace to attach to a team message.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择工作区上下文"
           }
         }
       }
@@ -8631,13 +8496,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enter your tasks below and Mimi Remote retains your current workspace and session context."
+            "value" : "Enter your tasks below and mimitag retains your current workspace and session context."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在下方输入任务，Mimi Remote 会保留当前工作区与会话上下文。"
+            "value" : "在下方输入任务，mimitag 会保留当前工作区与会话上下文。"
           }
         }
       }
@@ -11555,13 +11420,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Install Mimi Remote Mac"
+            "value" : "Install mimitag"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "安装 Mimi Remote Mac"
+            "value" : "安装 mimitag"
           }
         }
       }
@@ -13950,30 +13815,30 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote does not have camera access and cannot scan the pairing QR code shown on your Mac."
+            "value" : "mimitag does not have camera access and cannot scan the pairing QR code shown on your Mac."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote 没有相机访问权限，无法扫描 Mac 上显示的配对二维码。"
+            "value" : "mimitag 没有相机访问权限，无法扫描 Mac 上显示的配对二维码。"
           }
         }
       }
     },
     "ui.mimi_remote_connection_accessibility" : {
-      "comment" : "Accessibility label for Mimi Remote connection status. %@ is the status.",
+      "comment" : "Accessibility label for mimitag connection status. %@ is the status.",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote, %@"
+            "value" : "mimitag, %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote，%@"
+            "value" : "mimitag，%@"
           }
         }
       }
@@ -13984,13 +13849,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote is licensed under the GNU GPLv3 and is permitted under Section 7 for distribution through the Apple App Store and Google Play. This program does not provide any form of warranty; when distributing modified versions or binaries, the corresponding source code must still be provided and the equivalent license must be retained."
+            "value" : "mimitag is licensed under the GNU GPLv3 and is permitted under Section 7 for distribution through the Apple App Store and Google Play. This program does not provide any form of warranty; when distributing modified versions or binaries, the corresponding source code must still be provided and the equivalent license must be retained."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote 使用 GNU GPLv3，并依据第 7 节允许通过 Apple App Store 和 Google Play 分发。本程序不提供任何形式的担保；分发修改版或二进制时，仍须提供对应源码并保留同等许可。"
+            "value" : "mimitag 使用 GNU GPLv3，并依据第 7 节允许通过 Apple App Store 和 Google Play 分发。本程序不提供任何形式的担保；分发修改版或二进制时，仍须提供对应源码并保留同等许可。"
           }
         }
       }
@@ -14001,13 +13866,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote Project License"
+            "value" : "mimitag Project License"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mimi Remote 项目许可"
+            "value" : "mimitag 项目许可"
           }
         }
       }
@@ -15327,6 +15192,57 @@
         }
       }
     },
+    "ui.no_team_messages" : {
+      "comment" : "Empty-state title in the agent team conversation.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No team messages yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有团队消息"
+          }
+        }
+      }
+    },
+    "ui.no_team_messages_description" : {
+      "comment" : "Empty-state guidance in the agent team conversation.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mention one or more agents to start collaborating."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "@ 一个或多个 Agent 开始协作。"
+          }
+        }
+      }
+    },
+    "ui.no_workspace_context" : {
+      "comment" : "Menu option that sends a team message without a workspace envelope.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不附带工作区"
+          }
+        }
+      }
+    },
     "ui.no_workspace_has_been_opened_yet" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -15819,6 +15735,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "打开"
+          }
+        }
+      }
+    },
+    "ui.open_agent_team" : {
+      "comment" : "Accessibility label for opening the optional agent team view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open agent team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Agent 团队"
           }
         }
       }
@@ -21940,6 +21873,23 @@
         }
       }
     },
+    "ui.session_auto_approval_enabled" : {
+      "comment" : "A compact status button showing that all approvals are automatically accepted for the current session.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session Auto-approval On"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本会话自动批准已开启"
+          }
+        }
+      }
+    },
     "ui.session_completed" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -23194,6 +23144,7 @@
     },
     "ui.snapshot_refresh_failed_before_reconnection_value" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -24578,6 +24529,23 @@
         }
       }
     },
+    "ui.tap_to_disable_session_auto_approval" : {
+      "comment" : "Accessibility hint for the active session auto-approval status button.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap to require approval again for this session."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点后恢复本会话逐次请求审批。"
+          }
+        }
+      }
+    },
     "ui.tap_to_start_apple_realtime_voice_input" : {
       "localizations" : {
         "en" : {
@@ -24810,6 +24778,74 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "任务"
+          }
+        }
+      }
+    },
+    "ui.team" : {
+      "comment" : "Short navigation title for the optional agent team view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Team"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "团队"
+          }
+        }
+      }
+    },
+    "ui.team_message_placeholder" : {
+      "comment" : "Placeholder in the team message composer.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Message @codex, @claude…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给 @codex、@claude… 发消息"
+          }
+        }
+      }
+    },
+    "ui.team_same_message_hint" : {
+      "comment" : "Hint explaining that a team message can mention multiple agents.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "One message can mention multiple agents"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一条消息可以 @ 多个 Agent"
+          }
+        }
+      }
+    },
+    "ui.team_workspace_context_value" : {
+      "comment" : "Shows which workspace will be attached to the next team message. The argument is a workspace name.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace context: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将附带工作区：%@"
           }
         }
       }
@@ -26079,13 +26115,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The in-app reminder has been saved; the system notification is not turned on, please turn it on in iOS \"Settings > Notifications > Mimi Remote\""
+            "value" : "The in-app reminder has been saved; the system notification is not turned on, please turn it on in iOS \"Settings > Notifications > mimitag\""
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已保存 App 内提醒；系统通知未开启，请在 iOS“设置 > 通知 > Mimi Remote”中开启"
+            "value" : "已保存 App 内提醒；系统通知未开启，请在 iOS“设置 > 通知 > mimitag”中开启"
           }
         }
       }
@@ -27635,13 +27671,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This session is running in another client. Mimi Remote is currently observing only. Take over on this device to send messages or respond to approvals."
+            "value" : "This session is running in another client. mimitag is currently observing only. Take over on this device to send messages or respond to approvals."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这个会话正在其他客户端运行，Mimi Remote 当前仅观察。在此设备上接管后才能发送消息或处理审批。"
+            "value" : "这个会话正在其他客户端运行，mimitag 当前仅观察。在此设备上接管后才能发送消息或处理审批。"
           }
         }
       }
@@ -31529,23 +31565,6 @@
         }
       }
     },
-    "ui.working_for_value" : {
-      "comment" : "Running work group title with a compact duration.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Working for %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已工作 %@"
-          }
-        }
-      }
-    },
     "ui.working_directory_is_not_in_remote_allowlist_value" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -31559,6 +31578,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工作目录不在远程 allowlist 中：%@"
+          }
+        }
+      }
+    },
+    "ui.working_for_value" : {
+      "comment" : "Running work group title with a compact duration.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Working for %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已工作 %@"
           }
         }
       }
@@ -31610,6 +31646,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工作区改动"
+          }
+        }
+      }
+    },
+    "ui.workspace_context" : {
+      "comment" : "Label for the workspace context selector in the team view.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace context"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区上下文"
           }
         }
       }
@@ -32129,6 +32182,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "是"
+          }
+        }
+      }
+    },
+    "ui.you" : {
+      "comment" : "Display name for messages sent by the current user.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你"
           }
         }
       }

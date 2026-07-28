@@ -26,7 +26,7 @@ struct DashboardView: View {
             }
             .padding(24)
         }
-        .navigationTitle("Mimi Remote Mac")
+        .navigationTitle("mimitag")
     }
 }
 
@@ -41,7 +41,7 @@ private struct ServiceOverviewView: View {
                     KeyValueRow(key: "Endpoint", value: status.endpoint)
                     KeyValueRow(key: "版本", value: status.version)
                     KeyValueRow(key: "已授权项目", value: "\(status.projects)")
-                    KeyValueRow(key: "运行方式", value: store.owner == .macApp ? "Mimi Remote Mac" : "Homebrew")
+                    KeyValueRow(key: "运行方式", value: store.owner == .macApp ? "mimitag" : "Homebrew")
                 }
             }
 
