@@ -177,6 +177,110 @@ final class WorkspaceVisualSnapshotTests: XCTestCase {
         )
     }
 
+    func testProviderUsageCardsKeepCodexAndClaudeSeparate() {
+        let previousLanguage = UserDefaults.standard.string(forKey: AppLanguage.preferenceKey)
+        UserDefaults.standard.set(AppLanguage.simplifiedChinese.rawValue, forKey: AppLanguage.preferenceKey)
+        defer {
+            if let previousLanguage {
+                UserDefaults.standard.set(previousLanguage, forKey: AppLanguage.preferenceKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppLanguage.preferenceKey)
+            }
+        }
+
+        let now = Date(timeIntervalSince1970: 1_785_105_600)
+        let codex = CodexUsageWindowsDisplay.make(
+            rateLimit: RateLimitSummary(
+                limitName: "Codex",
+                primaryUsedPercent: 38,
+                secondaryUsedPercent: 64,
+                primaryResetsAt: Int64(now.addingTimeInterval(3_600).timeIntervalSince1970),
+                secondaryResetsAt: Int64(now.addingTimeInterval(86_400).timeIntervalSince1970),
+                primaryWindowDurationMins: 300,
+                secondaryWindowDurationMins: 10_080
+            ),
+            now: now,
+            fallbackDisplayName: "Codex"
+        )
+        let claude = CodexUsageWindowsDisplay.make(
+            rateLimit: RateLimitSummary(
+                limitName: "Claude",
+                primaryUsedPercent: 21,
+                secondaryUsedPercent: 47,
+                primaryResetsAt: Int64(now.addingTimeInterval(7_200).timeIntervalSince1970),
+                secondaryResetsAt: Int64(now.addingTimeInterval(172_800).timeIntervalSince1970),
+                primaryWindowDurationMins: 300,
+                secondaryWindowDurationMins: 10_080
+            ),
+            now: now,
+            fallbackDisplayName: "Claude"
+        )
+        let themeStore = ThemeStore(defaults: UserDefaults(suiteName: "UsageCards.\(UUID().uuidString)")!)
+
+        let view = VStack(spacing: 12) {
+            ProviderUsageSettingsCard(providerName: "Codex", display: codex, tint: .pink)
+            ProviderUsageSettingsCard(providerName: "Claude", display: claude, tint: .cyan)
+        }
+        .padding(20)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .environmentObject(themeStore)
+        .environment(\.colorScheme, .light)
+        .frame(width: 620, height: 620)
+
+        assertSnapshot(
+            of: view,
+            as: .image(
+                drawHierarchyInKeyWindow: true,
+                precision: 0.98,
+                layout: .fixed(width: 620, height: 620)
+            )
+        )
+    }
+
+    func testTeamConversationUsesWorkbenchComposerLayout() {
+        let appDefaultsSuite = "TeamConversationVisual.App.\(UUID().uuidString)"
+        let appDefaults = UserDefaults(suiteName: appDefaultsSuite)!
+        let appStore = AppStore(
+            defaults: appDefaults,
+            tokenStore: TokenStore(keychain: TestKeychainOperations())
+        )
+        let sessionStore = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { MockSessionStoreClient(projects: [], sessions: []) }
+        )
+        let teamStore = TeamStore(appStore: appStore)
+        teamStore.selectWorkspace(
+            AgentProject(
+                id: "mimitag",
+                name: "mimitag",
+                path: "/Users/demo/code/mimitag"
+            )
+        )
+        let themeStore = ThemeStore(
+            defaults: UserDefaults(suiteName: "TeamConversationVisual.Theme.\(UUID().uuidString)")!
+        )
+
+        let view = NavigationStack {
+            TeamConversationView()
+        }
+        .environmentObject(sessionStore)
+        .environmentObject(teamStore)
+        .environmentObject(themeStore)
+        .environment(\.colorScheme, .light)
+        .frame(width: 744, height: 1_133)
+
+        assertSnapshot(
+            of: view,
+            as: .image(
+                drawHierarchyInKeyWindow: true,
+                precision: 0.98,
+                layout: .fixed(width: 744, height: 1_133)
+            )
+        )
+    }
+
     private func gitSummary(
         project: AgentProject,
         branch: String,

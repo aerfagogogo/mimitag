@@ -93,11 +93,21 @@ struct SettingsView: View {
 
         return Form {
             Section {
-                CombinedUsageSettingsCard(
-                    codexDisplay: codexUsage,
-                    claudeDisplay: claudeUsage,
-                    includesClaude: sessionStore.hasClaudeRuntimeChannel
-                )
+                VStack(spacing: 12) {
+                    ProviderUsageSettingsCard(
+                        providerName: "Codex",
+                        display: codexUsage,
+                        tint: .pink
+                    )
+                    if sessionStore.hasClaudeRuntimeChannel {
+                        ProviderUsageSettingsCard(
+                            providerName: "Claude",
+                            display: claudeUsage,
+                            tint: .cyan
+                        )
+                    }
+                }
+                .padding(.vertical, 4)
             } header: {
                 HStack {
                     Text(L10n.text("ui.token_quota"))
@@ -1034,6 +1044,91 @@ private struct AIUsageRefreshButton: View {
                 : L10n.format("ui.refresh_value_usage", "AI")
         )
         .accessibilityIdentifier("settings.aiUsage.refresh")
+    }
+}
+
+struct ProviderUsageSettingsCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var themeStore: ThemeStore
+
+    let providerName: String
+    let display: CodexUsageWindowsDisplay
+    let tint: Color
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text(providerName)
+                    .font(themeStore.uiFont(.headline, weight: .semibold))
+                    .foregroundStyle(tokens.primaryText)
+
+                Text(display.hasLiveData ? L10n.text("ui.available") : L10n.text("ui.waiting"))
+                    .font(themeStore.uiFont(.caption2, weight: .semibold))
+                    .foregroundStyle(display.hasLiveData ? tint : tokens.secondaryText)
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(
+                        (display.hasLiveData ? tint : tokens.tertiaryText).opacity(0.11),
+                        in: Capsule()
+                    )
+
+                Spacer(minLength: 8)
+            }
+
+            if display.windows.isEmpty {
+                Text(display.creditText)
+                    .font(themeStore.uiFont(.caption))
+                    .foregroundStyle(tokens.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ForEach(Array(display.windows.enumerated()), id: \.element.id) { index, window in
+                    if index > 0 {
+                        Divider().overlay(tokens.border.opacity(0.65))
+                    }
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(window.label)
+                                .font(themeStore.uiFont(.subheadline, weight: .semibold))
+                                .foregroundStyle(tokens.primaryText)
+                                .monospacedDigit()
+                            Text(window.title)
+                                .font(themeStore.uiFont(.caption))
+                                .foregroundStyle(tokens.secondaryText)
+
+                            Spacer(minLength: 8)
+
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(window.primaryText)
+                                    .font(themeStore.uiFont(.caption, weight: .medium))
+                                    .foregroundStyle(tokens.secondaryText)
+                                Text(window.remainingText)
+                                    .font(themeStore.uiFont(.subheadline, weight: .semibold))
+                                    .foregroundStyle(window.remainingProgress == nil ? tokens.secondaryText : tint)
+                            }
+                            .monospacedDigit()
+                        }
+
+                        ProgressView(value: window.remainingProgress ?? 0)
+                            .tint(tint)
+                            .opacity(window.remainingProgress == nil ? 0.28 : 1)
+
+                        Text(window.resetText)
+                            .font(themeStore.uiFont(.caption2))
+                            .foregroundStyle(tokens.tertiaryText)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+        }
+        .padding(14)
+        .background(tokens.elevatedSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(tint.opacity(display.hasLiveData ? 0.34 : 0.14), lineWidth: 1)
+        }
     }
 }
 

@@ -17,14 +17,12 @@ private enum AppSheetDestination: String, Identifiable {
 enum CompactWorkbenchTab: Hashable {
     case sessions
     case workspaces
-    case team
     case settings
 
     var title: String {
         switch self {
         case .sessions: return L10n.text("ui.session")
         case .workspaces: return L10n.text("ui.workspace")
-        case .team: return L10n.text("ui.team")
         case .settings: return L10n.text("ui.settings")
         }
     }
@@ -33,7 +31,6 @@ enum CompactWorkbenchTab: Hashable {
         switch self {
         case .sessions: return "bubble.left.and.bubble.right"
         case .workspaces: return "folder"
-        case .team: return "person.3.sequence"
         case .settings: return "gearshape"
         }
     }
@@ -178,14 +175,14 @@ struct WorkbenchNavigationState: Equatable {
             return nil
 
         case .compactPathChanged(let tab, let path):
-            guard tab != .settings, tab != .team else { return nil }
+            guard tab != .settings else { return nil }
             compactSelectedTab = tab
             switch tab {
             case .sessions:
                 compactSessionPath = path
             case .workspaces:
                 compactWorkspacePath = path
-            case .team, .settings:
+            case .settings:
                 break
             }
 
@@ -207,8 +204,8 @@ struct WorkbenchNavigationState: Equatable {
 
         case .compactTabChanged(let tab):
             compactSelectedTab = tab
-            guard tab != .settings, tab != .team else {
-                // 团队和设置是全局入口，切入时保留当前会话/工作区上下文。
+            guard tab != .settings else {
+                // 设置是全局入口，切入时保留当前会话/工作区上下文。
                 return nil
             }
             let path = tab == .sessions ? compactSessionPath : compactWorkspacePath
@@ -249,6 +246,14 @@ struct WorkbenchNavigationState: Equatable {
             applyRoot(.workspaces, usesCompactNavigation: usesCompactNavigation)
         case .team:
             selection = .team
+            route = .workspaces
+            pendingSessionSelectionID = nil
+            if usesCompactNavigation {
+                compactSelectedTab = .workspaces
+                if compactWorkspacePath.last != .team {
+                    compactWorkspacePath.append(.team)
+                }
+            }
         case .session(let sessionID):
             applySession(
                 sessionID,
@@ -350,7 +355,7 @@ struct WorkbenchNavigationState: Equatable {
             return .sessions
         case .workspaces:
             return .workspaces
-        case .team, .settings:
+        case .settings:
             return route.rootPage
         }
     }
@@ -398,6 +403,7 @@ struct UnifiedWorkbenchShell: View {
     @EnvironmentObject private var appStore: AppStore
     @EnvironmentObject private var sessionStore: SessionStore
     @EnvironmentObject private var themeStore: ThemeStore
+    @EnvironmentObject private var teamStore: TeamStore
     @EnvironmentObject private var notificationResponseAdapter: SessionNotificationResponseAdapter
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -545,14 +551,6 @@ struct UnifiedWorkbenchShell: View {
             .tag(CompactWorkbenchTab.workspaces)
 
             NavigationStack {
-                TeamConversationView()
-            }
-            .tabItem {
-                Label(CompactWorkbenchTab.team.title, systemImage: CompactWorkbenchTab.team.systemImage)
-            }
-            .tag(CompactWorkbenchTab.team)
-
-            NavigationStack {
                 SettingsView(
                     isInitialSetup: false,
                     showsDoneButton: false,
@@ -669,13 +667,6 @@ struct UnifiedWorkbenchShell: View {
                         tokens: tokens,
                         layout: layout
                     )
-                    sidebarDestinationRow(
-                        destination: .team,
-                        title: L10n.text("ui.team"),
-                        systemImage: "person.3.sequence",
-                        tokens: tokens,
-                        layout: layout
-                    )
                 }
 
                 if !sessionStore.activeSessions.isEmpty {
@@ -717,10 +708,15 @@ struct UnifiedWorkbenchShell: View {
             ToolbarItem(placement: .principal) {
                 // 标题放进系统顶栏，才能与 iPad 的侧栏收起按钮保持同一行。
                 HStack(spacing: 8) {
-                    CodexUsageRingsControl(
-                        display: sessionStore.accountCodexUsageWindowsDisplay,
+                    AccountUsageControl(
+                        codexDisplay: sessionStore.accountCodexUsageWindowsDisplay,
+                        claudeDisplay: sessionStore.accountClaudeUsageWindowsDisplay,
+                        includesClaude: sessionStore.hasClaudeRuntimeChannel,
                         onRefresh: {
                             await sessionStore.refreshCodexUsage()
+                            if sessionStore.hasClaudeRuntimeChannel {
+                                await sessionStore.refreshClaudeUsage()
+                            }
                         }
                     )
 
@@ -857,8 +853,13 @@ struct UnifiedWorkbenchShell: View {
     private func workspaces(layout: WorkbenchLayout) -> some View {
         WorkspaceRootView(
             onStartSession: { project, runtimeChoice in
-                Task {
-                    await sessionStore.startNewSession(in: project, runtimeProvider: runtimeChoice.runtimeProvider)
+                if runtimeChoice == .team {
+                    teamStore.selectWorkspace(project)
+                    open(.team, source: .workspaces, layout: layout)
+                } else {
+                    Task {
+                        await sessionStore.startNewSession(in: project, runtimeProvider: runtimeChoice.runtimeProvider)
+                    }
                 }
             },
             onOpenSession: { session in
@@ -1266,7 +1267,7 @@ struct WorkbenchSidebarFooter: View {
                         L10n.format(
                             "ui.labeled_value",
                             "Codex",
-                            sessionStore.accountCodexUsageWindowsDisplay.creditText
+                            compactUsageText(sessionStore.accountCodexUsageWindowsDisplay)
                         )
                     )
                         .font(themeStore.uiFont(.caption2, weight: .medium))
@@ -1278,7 +1279,7 @@ struct WorkbenchSidebarFooter: View {
                         L10n.format(
                             "ui.labeled_value",
                             "Claude",
-                            sessionStore.accountClaudeUsageWindowsDisplay.creditText
+                            compactUsageText(sessionStore.accountClaudeUsageWindowsDisplay)
                         )
                     )
                         .font(themeStore.uiFont(.caption2))
@@ -1318,16 +1319,26 @@ struct WorkbenchSidebarFooter: View {
                 .frame(height: 1)
         }
     }
+
+    private func compactUsageText(_ display: CodexUsageWindowsDisplay) -> String {
+        guard !display.windows.isEmpty else {
+            return display.creditText
+        }
+        return display.windows
+            .map { "\($0.label) \($0.remainingText)" }
+            .joined(separator: " · ")
+    }
 }
 
-/// 侧栏标题旁的账号剩余用量入口。图形尺寸跟随横向尺寸环境变化，
-/// 因而 iPad mini 分屏和 iPhone 会自动使用更紧凑的版本。
-private struct CodexUsageRingsControl: View {
+/// 侧栏标题旁分别展示 Codex 与 Claude，禁止再用一个圆环承载两个提供方。
+private struct AccountUsageControl: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    let display: CodexUsageWindowsDisplay
+    let codexDisplay: CodexUsageWindowsDisplay
+    let claudeDisplay: CodexUsageWindowsDisplay
+    let includesClaude: Bool
     let onRefresh: () async -> Void
 
     @State private var showsDetails = false
@@ -1335,42 +1346,60 @@ private struct CodexUsageRingsControl: View {
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
-        let metrics = CodexUsageRingMetrics(isCompact: horizontalSizeClass == .compact)
-
         Button {
             showsDetails.toggle()
         } label: {
-            usageRings(metrics: metrics)
-                .frame(width: metrics.hitSize, height: metrics.hitSize)
-                .contentShape(Rectangle())
+            VStack(alignment: .leading, spacing: 2) {
+                providerBadge(name: "Codex", display: codexDisplay, tint: .pink)
+                if includesClaude {
+                    providerBadge(name: "Claude", display: claudeDisplay, tint: .cyan)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(tokens.surface.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(tokens.border.opacity(0.65), lineWidth: 1)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(L10n.text("ui.codex_remaining_usage"))
+        .accessibilityLabel(L10n.text("ui.model_quota"))
         .accessibilityValue(accessibilityValue)
-        .accessibilityIdentifier("sidebar.codexUsageRings")
+        .accessibilityIdentifier("sidebar.accountUsage")
         .popover(isPresented: $showsDetails, arrowEdge: .top) {
             usageDetails(tokens: tokens)
                 .presentationCompactAdaptation(.sheet)
-                .presentationDetents([.height(300), .medium])
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
     }
 
-    private func usageRings(metrics: CodexUsageRingMetrics) -> some View {
-        CodexUsageRingsGraphic(display: display, metrics: metrics)
+    private func providerBadge(
+        name: String,
+        display: CodexUsageWindowsDisplay,
+        tint: Color
+    ) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(tint)
+                .frame(width: 6, height: 6)
+            Text(name)
+                .font(themeStore.uiFont(size: 10, weight: .semibold))
+            Text(compactPercent(display))
+                .font(themeStore.uiFont(size: 10, weight: .medium))
+                .monospacedDigit()
+        }
+        .foregroundStyle(themeStore.tokens(for: colorScheme).primaryText)
     }
 
     private func usageDetails(tokens: ThemeTokens) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.text("ui.codex_remaining_usage"))
-                        .font(themeStore.uiFont(.headline, weight: .semibold))
-                        .foregroundStyle(tokens.primaryText)
-                    Text(display.windowSummaryText)
-                        .font(themeStore.uiFont(.caption))
-                        .foregroundStyle(tokens.secondaryText)
-                }
+                Text(L10n.text("ui.model_quota"))
+                    .font(themeStore.uiFont(.headline, weight: .semibold))
+                    .foregroundStyle(tokens.primaryText)
 
                 Spacer(minLength: 8)
 
@@ -1400,39 +1429,59 @@ private struct CodexUsageRingsControl: View {
                 .accessibilityLabel(L10n.text("ui.refresh_codex_usage_c0f2c6f0"))
             }
 
-            VStack(spacing: 14) {
-                if display.windows.isEmpty {
-                    Text(L10n.text("ui.after_refreshing_the_account_window_currently_returned_by"))
-                        .font(themeStore.uiFont(.caption))
-                        .foregroundStyle(tokens.secondaryText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    ForEach(Array(display.windows.enumerated()), id: \.element.id) { index, window in
-                        if index > 0 {
-                            Divider().overlay(tokens.border.opacity(0.72))
-                        }
-                        usageWindowRow(window: window, tokens: tokens)
-                    }
-                }
+            providerDetails(
+                name: "Codex",
+                display: codexDisplay,
+                tint: .pink,
+                tokens: tokens
+            )
+            if includesClaude {
+                Divider().overlay(tokens.border.opacity(0.72))
+                providerDetails(
+                    name: "Claude",
+                    display: claudeDisplay,
+                    tint: .cyan,
+                    tokens: tokens
+                )
             }
-
-            HStack(spacing: 7) {
-                Image(systemName: display.hasLiveData ? "checkmark.seal" : "info.circle")
-                    .font(.system(size: 12, weight: .semibold))
-                Text(display.creditText)
-                    .font(themeStore.uiFont(.caption, weight: .medium))
-                    .lineLimit(2)
-            }
-            .foregroundStyle(tokens.secondaryText)
         }
         .padding(16)
-        .frame(width: horizontalSizeClass == .compact ? nil : 300)
+        .frame(width: horizontalSizeClass == .compact ? nil : 360)
         .frame(maxWidth: horizontalSizeClass == .compact ? .infinity : nil, alignment: .leading)
     }
 
-    private func usageWindowRow(window: CodexUsageWindowDisplay, tokens: ThemeTokens) -> some View {
+    private func providerDetails(
+        name: String,
+        display: CodexUsageWindowsDisplay,
+        tint: Color,
+        tokens: ThemeTokens
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(name)
+                .font(themeStore.uiFont(.subheadline, weight: .semibold))
+                .foregroundStyle(tokens.primaryText)
+
+            if display.windows.isEmpty {
+                Text(display.creditText)
+                    .font(themeStore.uiFont(.caption))
+                    .foregroundStyle(tokens.secondaryText)
+            } else {
+                ForEach(Array(display.windows.enumerated()), id: \.element.id) { index, window in
+                    if index > 0 {
+                        Divider().overlay(tokens.border.opacity(0.55))
+                    }
+                    usageWindowRow(window: window, tint: tint, tokens: tokens)
+                }
+            }
+        }
+    }
+
+    private func usageWindowRow(
+        window: CodexUsageWindowDisplay,
+        tint: Color,
+        tokens: ThemeTokens
+    ) -> some View {
         let progress = window.remainingProgress ?? 0
-        let tint = tint(for: window)
 
         return VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -1476,19 +1525,18 @@ private struct CodexUsageRingsControl: View {
         await onRefresh()
     }
 
-    private func tint(for window: CodexUsageWindowDisplay) -> Color {
-        if window.durationMinutes != nil {
-            return window.isDayScaleWindow ? .pink : .cyan
-        }
-        return window.kind == .secondary ? .pink : .cyan
+    private func compactPercent(_ display: CodexUsageWindowsDisplay) -> String {
+        display.windows
+            .max { ($0.durationMinutes ?? 0) < ($1.durationMinutes ?? 0) }?
+            .remainingPercentText ?? "—"
     }
 
     private var accessibilityValue: String {
-        guard !display.windows.isEmpty else {
-            return L10n.text("ui.account_usage_has_not_been_obtained_yet")
-        }
-        return display.windows
-            .map { "\($0.accessibilityName)\($0.remainingText)" }
+        let displays = includesClaude
+            ? [("Codex", codexDisplay), ("Claude", claudeDisplay)]
+            : [("Codex", codexDisplay)]
+        return displays
+            .map { name, display in "\(name) \(compactPercent(display))" }
             .joined(separator: L10n.text("ui.list_separator"))
     }
 }
@@ -1584,11 +1632,11 @@ struct CodexUsageRingMetrics {
     let pending = CodexUsageWindowsDisplay.make(rateLimit: nil)
 
     HStack(spacing: 24) {
-        CodexUsageRingsControl(display: loaded, onRefresh: {})
+        AccountUsageControl(codexDisplay: loaded, claudeDisplay: loaded, includesClaude: true, onRefresh: {})
             .environment(\.horizontalSizeClass, .regular)
-        CodexUsageRingsControl(display: loaded, onRefresh: {})
+        AccountUsageControl(codexDisplay: loaded, claudeDisplay: loaded, includesClaude: true, onRefresh: {})
             .environment(\.horizontalSizeClass, .compact)
-        CodexUsageRingsControl(display: pending, onRefresh: {})
+        AccountUsageControl(codexDisplay: pending, claudeDisplay: pending, includesClaude: true, onRefresh: {})
             .environment(\.horizontalSizeClass, .compact)
     }
     .environmentObject(ThemeStore())

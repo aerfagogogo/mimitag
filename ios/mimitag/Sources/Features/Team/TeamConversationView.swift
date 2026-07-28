@@ -17,8 +17,6 @@ struct TeamConversationView: View {
         let tokens = themeStore.tokens(for: colorScheme)
 
         VStack(spacing: 0) {
-            teamHeader(tokens: tokens)
-
             if let errorMessage = teamStore.errorMessage {
                 errorBanner(errorMessage, tokens: tokens)
             }
@@ -27,21 +25,35 @@ struct TeamConversationView: View {
             composer(tokens: tokens)
         }
         .background(tokens.background.ignoresSafeArea())
-        .navigationTitle(L10n.text("ui.team"))
+        .navigationTitle(teamStore.selectedWorkspace?.name ?? L10n.text("ui.team"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await teamStore.load() }
-                } label: {
-                    if teamStore.isLoading {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 2) {
+                    Text(teamStore.selectedWorkspace?.name ?? L10n.text("ui.team"))
+                        .font(themeStore.uiFont(.headline, weight: .semibold))
+                        .foregroundStyle(tokens.primaryText)
+                        .lineLimit(1)
+                    Text(L10n.text("ui.agent_team"))
+                        .font(themeStore.uiFont(.caption2))
+                        .foregroundStyle(tokens.tertiaryText)
                 }
-                .accessibilityLabel(L10n.text("ui.refresh"))
-                .disabled(teamStore.isLoading)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 10) {
+                    workspaceMenu(tokens: tokens)
+                    Button {
+                        Task { await teamStore.load() }
+                    } label: {
+                        if teamStore.isLoading {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .accessibilityLabel(L10n.text("ui.refresh"))
+                    .disabled(teamStore.isLoading)
+                }
             }
         }
         .task {
@@ -160,8 +172,10 @@ struct TeamConversationView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 18)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 22)
+                .frame(maxWidth: 920)
+                .frame(maxWidth: .infinity)
             }
             .onChange(of: teamStore.messages.last?.id) { _, id in
                 guard let id else { return }
@@ -224,90 +238,141 @@ struct TeamConversationView: View {
     }
 
     private func composer(tokens: ThemeTokens) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !attachments.isEmpty {
-                attachmentStrip(tokens: tokens)
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
+                if !attachments.isEmpty {
+                    attachmentStrip(tokens: tokens)
+                }
 
-            if !mentionMatches.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(mentionMatches) { agent in
-                            Button {
-                                replaceMentionQuery(with: agent.name)
-                            } label: {
-                                Label("@\(agent.name)", systemImage: "at")
-                                    .font(themeStore.uiFont(.caption, weight: .semibold))
-                                    .padding(.horizontal, 10)
-                                    .frame(height: 32)
-                                    .foregroundStyle(tokens.primaryText)
-                                    .background(tokens.elevatedSurface, in: Capsule())
+                if !mentionMatches.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(mentionMatches) { agent in
+                                Button {
+                                    replaceMentionQuery(with: agent.name)
+                                } label: {
+                                    Label("@\(agent.name)", systemImage: "at")
+                                        .font(themeStore.uiFont(.caption, weight: .semibold))
+                                        .padding(.horizontal, 10)
+                                        .frame(height: 32)
+                                        .foregroundStyle(tokens.primaryText)
+                                        .background(tokens.elevatedSurface, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
-            }
 
-            TextField(L10n.text("ui.team_message_placeholder"), text: $draft, axis: .vertical)
-                .focused($composerFocused)
-                .lineLimit(1...6)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 10)
-                .background(tokens.elevatedSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(tokens.border, lineWidth: 1)
+                TextField(L10n.text("ui.team_message_placeholder"), text: $draft, axis: .vertical)
+                    .focused($composerFocused)
+                    .lineLimit(2...8)
+                    .font(themeStore.uiFont(.body))
+                    .foregroundStyle(tokens.primaryText)
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 6)
+                    .onSubmit(sendDraft)
+
+                if let attachmentErrorMessage {
+                    Text(attachmentErrorMessage)
+                        .font(themeStore.uiFont(.caption))
+                        .foregroundStyle(tokens.warning)
+                        .lineLimit(2)
                 }
-                .onSubmit(sendDraft)
 
-            if let attachmentErrorMessage {
-                Text(attachmentErrorMessage)
-                    .font(themeStore.uiFont(.caption))
-                    .foregroundStyle(tokens.warning)
-                    .lineLimit(2)
-            }
+                HStack(spacing: 10) {
+                    Menu {
+                        Button {
+                            presentPhotoLibraryPicker()
+                        } label: {
+                            Label(L10n.text("ui.add_image"), systemImage: "photo")
+                        }
 
-            HStack {
-                Text(
-                    teamStore.selectedWorkspace.map {
-                        L10n.format("ui.team_workspace_context_value", $0.name)
-                    } ?? L10n.text("ui.team_same_message_hint")
-                )
-                .font(themeStore.uiFont(.caption2))
-                .foregroundStyle(tokens.tertiaryText)
-                .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                Button {
-                    presentPhotoLibraryPicker()
-                } label: {
-                    Image(systemName: "photo")
-                }
-                .disabled(attachments.count >= Self.maximumImageAttachmentCount || teamStore.isSending)
-                .help(L10n.text("ui.add_image"))
-                .accessibilityLabel(L10n.text("ui.add_image"))
-
-                Button(action: sendDraft) {
-                    if teamStore.isSending {
-                        ProgressView()
-                            .tint(tokens.primaryActionForeground)
-                    } else {
-                        Label(L10n.text("ui.send"), systemImage: "arrow.up")
+                        if !teamStore.agents.isEmpty {
+                            Divider()
+                            ForEach(teamStore.agents) { agent in
+                                Button {
+                                    replaceMentionQuery(with: agent.name)
+                                } label: {
+                                    Label("@\(agent.name)", systemImage: "at")
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(themeStore.uiFont(size: 16, weight: .semibold))
+                            .frame(width: 38, height: 38)
+                            .background(tokens.elevatedSurface, in: Circle())
                     }
+                    .buttonStyle(.plain)
+                    .disabled(attachments.count >= Self.maximumImageAttachmentCount || teamStore.isSending)
+                    .accessibilityLabel(L10n.text("ui.add_image"))
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(teamStore.agents) { agent in
+                                HStack(spacing: 5) {
+                                    Circle()
+                                        .fill(agent.isOnline ? tokens.success : tokens.tertiaryText)
+                                        .frame(width: 6, height: 6)
+                                    Text("@\(agent.name)")
+                                        .font(themeStore.uiFont(.caption, weight: .semibold))
+                                }
+                                .foregroundStyle(tokens.secondaryText)
+                                .padding(.horizontal, 9)
+                                .frame(height: 32)
+                                .background(tokens.elevatedSurface, in: Capsule())
+                            }
+                        }
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Button(action: sendDraft) {
+                        Group {
+                            if teamStore.isSending {
+                                ProgressView()
+                                    .tint(tokens.primaryActionForeground)
+                            } else {
+                                Image(systemName: "arrow.up")
+                                    .font(themeStore.uiFont(size: 15, weight: .semibold))
+                            }
+                        }
+                        .frame(width: 42, height: 42)
+                        .background(
+                            canSend ? tokens.primaryAction : tokens.elevatedSurface,
+                            in: Circle()
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(canSend ? tokens.primaryActionForeground : tokens.tertiaryText)
+                    .disabled(!canSend)
+                    .accessibilityLabel(L10n.text("ui.send_collaboration_message"))
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canSend)
-                .accessibilityLabel(L10n.text("ui.send_collaboration_message"))
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(tokens.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(tokens.border.opacity(0.82), lineWidth: 1)
+            }
+
+            Text(
+                teamStore.selectedWorkspace.map {
+                    L10n.format("ui.team_workspace_context_value", $0.name)
+                } ?? L10n.text("ui.team_same_message_hint")
+            )
+            .font(themeStore.uiFont(.caption2))
+            .foregroundStyle(tokens.tertiaryText)
+            .padding(.horizontal, 8)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.bar)
-        .overlay(alignment: .top) {
-            Rectangle().fill(tokens.border.opacity(0.6)).frame(height: 1)
-        }
+        .padding(.horizontal, 24)
+        .padding(.top, 10)
+        .padding(.bottom, 14)
+        .frame(maxWidth: 920)
+        .frame(maxWidth: .infinity)
+        .background(tokens.background)
     }
 
     private func attachmentStrip(tokens: ThemeTokens) -> some View {

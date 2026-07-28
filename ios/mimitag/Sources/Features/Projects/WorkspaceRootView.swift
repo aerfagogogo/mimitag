@@ -63,6 +63,7 @@ private struct WorkspaceIconMeeGoShape: Shape {
 enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
     case codex
     case claude
+    case team
 
     var id: String { rawValue }
 
@@ -72,6 +73,8 @@ enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
             return nil
         case .claude:
             return "claude"
+        case .team:
+            return nil
         }
     }
 
@@ -81,6 +84,10 @@ enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
             return L10n.text("ui.create_a_new_codex_session")
         case .claude:
             return L10n.text("ui.create_a_new_claude_code_session")
+        case .team:
+            return Locale.preferredLanguages.first?.hasPrefix("zh") == true
+                ? "新建团队协作"
+                : "New team collaboration"
         }
     }
 
@@ -90,11 +97,13 @@ enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
             return "ChatGPT"
         case .claude:
             return "Claude"
+        case .team:
+            return ""
         }
     }
 
     static func available(claudeChannelAvailable: Bool) -> [Self] {
-        claudeChannelAvailable ? [.codex, .claude] : [.codex]
+        claudeChannelAvailable ? [.codex, .claude, .team] : [.codex, .team]
     }
 }
 
@@ -1124,10 +1133,10 @@ private struct WorkspaceDetailView: View {
         if horizontalSizeClass == .compact {
             return [GridItem(.flexible(minimum: 0), spacing: 12)]
         }
-        return [
-            GridItem(.flexible(minimum: 0), spacing: 12),
-            GridItem(.flexible(minimum: 0), spacing: 12)
-        ]
+        return Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: 12),
+            count: 3
+        )
     }
 
     private func actionButton(
@@ -1160,23 +1169,35 @@ private struct WorkspaceDetailView: View {
 
     @ViewBuilder
     private func actionIcon(choice: WorkspaceSessionRuntimeChoice) -> some View {
-        // 只恢复运行时图标；操作卡片继续使用中性背景，不恢复 Codex 入口原来的深色强调底。
-        Image(choice.brandAssetName)
-            .resizable()
-            .renderingMode(.original)
-            .scaledToFit()
-            .frame(
-                width: choice == .codex ? 38 : 20,
-                height: choice == .codex ? 38 : 20
-            )
-            .frame(width: 38, height: 38)
-            .background(
-                choice == .codex
-                    ? Color.white
-                    : Color(red: 0.973, green: 0.949, blue: 0.914),
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-            )
-            .accessibilityHidden(true)
+        if choice == .team {
+            Image(systemName: "person.3.sequence.fill")
+                .font(themeStore.uiFont(size: 18, weight: .semibold))
+                .foregroundStyle(themeStore.tokens(for: colorScheme).primaryAction)
+                .frame(width: 38, height: 38)
+                .background(
+                    themeStore.tokens(for: colorScheme).primaryAction.opacity(0.11),
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
+                .accessibilityHidden(true)
+        } else {
+            // 只恢复运行时图标；操作卡片继续使用中性背景，不恢复 Codex 入口原来的深色强调底。
+            Image(choice.brandAssetName)
+                .resizable()
+                .renderingMode(.original)
+                .scaledToFit()
+                .frame(
+                    width: choice == .codex ? 38 : 20,
+                    height: choice == .codex ? 38 : 20
+                )
+                .frame(width: 38, height: 38)
+                .background(
+                    choice == .codex
+                        ? Color.white
+                        : Color(red: 0.973, green: 0.949, blue: 0.914),
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
+                .accessibilityHidden(true)
+        }
     }
 
     private func recentSessionsSection(tokens: ThemeTokens) -> some View {

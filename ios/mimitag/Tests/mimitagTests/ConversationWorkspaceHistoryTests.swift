@@ -1562,16 +1562,17 @@ extension ConversationDataFlowTests {
     func testWorkspaceSessionRuntimeChoicesExposeClaudeProviderOnlyWhenAvailable() {
         XCTAssertEqual(
             WorkspaceSessionRuntimeChoice.available(claudeChannelAvailable: false),
-            [.codex],
-            "Claude 通道不可用时，工作区入口只能创建 Codex 会话"
+            [.codex, .team],
+            "Claude 通道不可用时，团队协作入口仍应保留在工作区"
         )
         XCTAssertEqual(
             WorkspaceSessionRuntimeChoice.available(claudeChannelAvailable: true),
-            [.codex, .claude],
-            "Claude 通道可用时，工作区入口必须显式暴露 Claude 会话动作"
+            [.codex, .claude, .team],
+            "工作区必须并列暴露 Codex、Claude 与团队协作三个入口"
         )
         XCTAssertNil(WorkspaceSessionRuntimeChoice.codex.runtimeProvider)
         XCTAssertEqual(WorkspaceSessionRuntimeChoice.claude.runtimeProvider, "claude")
+        XCTAssertNil(WorkspaceSessionRuntimeChoice.team.runtimeProvider)
         XCTAssertEqual(WorkspaceSessionRuntimeChoice.codex.brandAssetName, "ChatGPT")
         XCTAssertEqual(WorkspaceSessionRuntimeChoice.claude.brandAssetName, "Claude")
     }

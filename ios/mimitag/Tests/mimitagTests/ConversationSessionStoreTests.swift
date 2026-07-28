@@ -1157,6 +1157,30 @@ extension ConversationDataFlowTests {
         XCTAssertTrue(state.compactWorkspacePath.isEmpty)
     }
 
+    func testWorkbenchNavigationOpensTeamInsideWorkspaceStack() {
+        var state = WorkbenchNavigationState(route: .workspaces)
+
+        let effect = state.reduce(
+            .open(.team, source: .workspaces),
+            usesCompactNavigation: true,
+            selectedSessionID: nil
+        )
+
+        XCTAssertNil(effect)
+        XCTAssertEqual(state.route, .workspaces)
+        XCTAssertEqual(state.selection, .team)
+        XCTAssertEqual(state.compactSelectedTab, .workspaces)
+        XCTAssertEqual(state.compactWorkspacePath, [.team])
+
+        _ = state.reduce(
+            .compactPathChanged(tab: .workspaces, path: []),
+            usesCompactNavigation: true,
+            selectedSessionID: nil
+        )
+        XCTAssertEqual(state.selection, .workspaces)
+        XCTAssertTrue(state.compactWorkspacePath.isEmpty)
+    }
+
     func testWorkbenchNavigationRestoresSessionIntoItsSourceStack() {
         var state = WorkbenchNavigationState()
         let route = WorkbenchRestorationRoute.session(
