@@ -59,16 +59,27 @@ final class TeamStore: ObservableObject {
     }
 
     @discardableResult
-    func send(_ content: String) async -> Bool {
-        let normalized = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty, !isSending else {
+    func send(_ content: String, imageDataURLs: [String] = []) async -> Bool {
+        let normalizedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedImages = imageDataURLs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard (!normalizedContent.isEmpty || !normalizedImages.isEmpty), !isSending else {
             return false
         }
         isSending = true
         defer { isSending = false }
         do {
-            let scopedContent = TeamWorkspaceScope.wrap(normalized, project: selectedWorkspace)
-            _ = try await makeClient().sendTeamMessage(content: scopedContent)
+            let scopedContent = TeamWorkspaceScope.wrap(normalizedContent, project: selectedWorkspace)
+            let imageAttachmentSection = normalizedImages.enumerated().map { "![image \($0.offset + 1)](\($0.element))" }.joined(separator: "\n")
+            let fullContent: String
+            if imageAttachmentSection.isEmpty {
+                fullContent = scopedContent
+            } else if scopedContent.isEmpty {
+                fullContent = imageAttachmentSection
+            } else {
+                fullContent = scopedContent + "\n\n" + imageAttachmentSection
+            }
+            _ = try await makeClient().sendTeamMessage(content: fullContent)
             merge(try await makeClient().teamMessages(since: maxSequence))
             errorMessage = nil
             return true

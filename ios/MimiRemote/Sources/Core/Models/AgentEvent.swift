@@ -773,7 +773,11 @@ struct CodexAppServerEventProjector {
             ?? nestedString(in: params, key: "thread", nestedKey: "id")
         let turnID = firstString(in: params, keys: ["turnId", "turn_id"]) ?? nestedString(in: params, key: "turn", nestedKey: "id")
         let item = params["item"]?.objectValue
-        let itemID = firstString(in: params, keys: ["itemId", "item_id", "requestId", "request_id", "callId", "approvalId"]) ?? item?["id"]?.stringValue
+        let errorPayload = params["error"]?.objectValue
+        let itemID = firstString(in: params, keys: ["itemId", "item_id", "requestId", "request_id", "callId", "approvalId"])
+            ?? item?["id"]?.stringValue
+            ?? firstString(in: errorPayload ?? [:], keys: ["itemId", "item_id", "requestId", "request_id", "callId", "approvalId"])
+            ?? errorPayload?["item"]?.objectValue?["id"]?.stringValue
         let messageID = firstString(in: params, keys: ["messageId", "message_id"]) ?? appServerMessageID(turnID: turnID, itemID: itemID)
         let seq = nextSeq(for: sessionID)
         return AgentEventMetadata(

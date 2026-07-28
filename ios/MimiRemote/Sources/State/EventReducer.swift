@@ -107,6 +107,7 @@ actor EventReducer {
             output.goalUpdates.append((id, nil))
         case .turnStarted(let metadata):
             let id = metadata.sessionID ?? fallbackSessionID
+            output.errorMessage = nil
             output.statusUpdates.append((id, "running"))
             if let turnID = metadata.turnID {
                 output.activeTurnMutations.append(.set(id, turnID))
@@ -287,7 +288,11 @@ actor EventReducer {
                 ),
                 id
             ))
-            output.errorMessage = payload.message
+            // Item 级错误（例如 Skill/tool 调用）通常对应当前回合内单个调用失败，
+            // 仍应在时间线显示，但不应复写会话级运行异常横幅。
+            if metadata.itemID == nil {
+                output.errorMessage = payload.message
+            }
             output.logAppends.append(EventReducerLogAppend(
                 text: "\n[agentd] \(payload.message)\n",
                 sessionID: id,

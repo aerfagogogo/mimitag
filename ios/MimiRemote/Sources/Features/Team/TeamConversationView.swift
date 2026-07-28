@@ -1,3 +1,5 @@
+import PhotosUI
+import UniformTypeIdentifiers
 import SwiftUI
 
 struct TeamConversationView: View {
@@ -7,6 +9,9 @@ struct TeamConversationView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
+    @State private var attachments: [String] = []
+    @State private var photoLibraryPickerRequest: PhotoLibraryPickerRequest?
+    @State private var attachmentErrorMessage: String?
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -45,6 +50,13 @@ struct TeamConversationView: View {
                 try? await Task.sleep(for: .seconds(3))
                 await teamStore.sync()
             }
+        }
+        .sheet(item: $photoLibraryPickerRequest) { request in
+            PhotoLibraryPicker(selectionLimit: request.selectionLimit) { results in
+                photoLibraryPickerRequest = nil
+                loadPhotoAttachments(results)
+            }
+            .ignoresSafeArea()
         }
     }
 
@@ -213,6 +225,10 @@ struct TeamConversationView: View {
 
     private func composer(tokens: ThemeTokens) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !attachments.isEmpty {
+                attachmentStrip(tokens: tokens)
+            }
+
             if !mentionMatches.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -245,6 +261,13 @@ struct TeamConversationView: View {
                 }
                 .onSubmit(sendDraft)
 
+            if let attachmentErrorMessage {
+                Text(attachmentErrorMessage)
+                    .font(themeStore.uiFont(.caption))
+                    .foregroundStyle(tokens.warning)
+                    .lineLimit(2)
+            }
+
             HStack {
                 Text(
                     teamStore.selectedWorkspace.map {
@@ -256,6 +279,15 @@ struct TeamConversationView: View {
                 .lineLimit(1)
 
                 Spacer(minLength: 8)
+
+                Button {
+                    presentPhotoLibraryPicker()
+                } label: {
+                    Image(systemName: "photo")
+                }
+                .disabled(attachments.count >= Self.maximumImageAttachmentCount || teamStore.isSending)
+                .help("添加图片")
+                .accessibilityLabel("添加图片")
 
                 Button(action: sendDraft) {
                     if teamStore.isSending {
@@ -278,8 +310,22 @@ struct TeamConversationView: View {
         }
     }
 
+    private func attachmentStrip(tokens: ThemeTokens) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(attachments.enumerated()), id: \.offset) { index, url in
+                    TeamImageAttachmentChip(url: url) {
+                        removeAttachment(at: index)
+                    }
+                    .environmentObject(themeStore)
+                }
+            }
+        }
+    }
+
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !teamStore.isSending
+        let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return (hasText || !attachments.isEmpty) && !teamStore.isSending
     }
 
     private var mentionQueryRange: Range<String.Index>? {
@@ -317,16 +363,182 @@ struct TeamConversationView: View {
         composerFocused = true
     }
 
+    private func presentPhotoLibraryPicker() {
+        let availableCount = Self.maximumImageAttachmentCount - attachments.count
+        guard availableCount > 0 else {
+            attachmentErrorMessage = L10n.format(
+                "ui.at_most_images_can_be_added_to_each",
+                Self.maximumImageAttachmentCount
+            )
+            return
+        }
+        photoLibraryPickerRequest = PhotoLibraryPickerRequest(
+            selectionLimit: availableCount,
+            targetScope: .none
+        )
+    }
+
+    private func loadPhotoAttachments(_ results: [PHPickerResult]) {
+        let availableCount = max(0, Self.maximumImageAttachmentCount - attachments.count)
+        let selectedResults = Array(results.prefix(availableCount))
+        let skippedCount = max(0, results.count - selectedResults.count)
+        guard !selectedResults.isEmpty else {
+            attachmentErrorMessage = skippedCount > 0
+                ? L10n.format("ui.at_most_images_can_be_added_to_each", Self.maximumImageAttachmentCount)
+                : nil
+            return
+        }
+
+        Task {
+            var imageURLs: [String] = []
+            var failedCount = 0
+            var firstError: Error?
+
+            for result in selectedResults {
+                do {
+                    let data = try await Self.loadImageData(from: result.itemProvider)
+                    let prepared = try await Task.detached(priority: .userInitiated) {
+                        try ImageAttachmentEncoder.prepare(data)
+                    }.value
+                    imageURLs.append(prepared.dataURL)
+                } catch {
+                    failedCount += 1
+                    firstError = firstError ?? error
+                }
+            }
+
+            await MainActor.run {
+                attachments.append(contentsOf: imageURLs)
+                if failedCount == 0 {
+                    attachmentErrorMessage = nil
+                } else if !imageURLs.isEmpty {
+                    attachmentErrorMessage = L10n.format(
+                        "ui.pictures_have_been_added_and_have_not_been",
+                        imageURLs.count,
+                        failedCount + skippedCount
+                    )
+                } else {
+                    attachmentErrorMessage = userFacingAttachmentError(firstError)
+                }
+            }
+        }
+    }
+
+    private func userFacingAttachmentError(_ error: Error?) -> String {
+        let raw = error?.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let raw else {
+            return L10n.text("ui.image_reading_failed")
+        }
+        return raw.isEmpty ? L10n.text("ui.image_reading_failed") : raw
+    }
+
+    private func removeAttachment(at index: Int) {
+        guard attachments.indices.contains(index) else {
+            return
+        }
+        attachments.remove(at: index)
+        if attachments.isEmpty {
+            attachmentErrorMessage = nil
+        }
+    }
+
+    private static func loadImageData(from provider: NSItemProvider) async throws -> Data {
+        guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else {
+            throw PhotoLibraryPickerError.unsupportedImage
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, error in
+                if let data {
+                    continuation.resume(returning: data)
+                } else if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(throwing: PhotoLibraryPickerError.unreadableImage)
+                }
+            }
+        }
+    }
+
     private func sendDraft() {
+        let normalizedText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sendingAttachments = attachments
         guard canSend else {
             return
         }
-        let content = draft
+
         draft = ""
+        attachments.removeAll()
         Task {
-            if await teamStore.send(content) == false {
-                draft = content
+            if await teamStore.send(normalizedText, imageDataURLs: sendingAttachments) == false {
+                await MainActor.run {
+                    draft = normalizedText
+                    attachments = sendingAttachments
+                }
             }
+        }
+    }
+
+    private static let maximumImageAttachmentCount = 8
+}
+
+private struct TeamImageAttachmentChip: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.colorScheme) private var colorScheme
+    let url: String
+    let onRemove: () -> Void
+
+    @State private var image: UIImage?
+    @State private var isLoading = false
+
+    var body: some View {
+        let source = ConversationImageSource.markdown(url)
+        let cacheKey = source.id
+        let tokens = themeStore.tokens(for: colorScheme)
+
+        ZStack(alignment: .topTrailing) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(tokens.elevatedSurface)
+                .frame(width: 66, height: 66)
+
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 66, height: 66)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                } else if isLoading {
+                    ProgressView()
+                        .frame(width: 66, height: 66)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 24))
+                        .foregroundStyle(tokens.secondaryText)
+                        .frame(width: 66, height: 66)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            Button(role: .destructive) {
+                onRemove()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.red)
+            .background(tokens.surface, in: Circle())
+        }
+        .frame(width: 66, height: 66)
+        .task(id: url) {
+            isLoading = true
+            image = await DataURLImageDecoder.image(
+                from: url,
+                cacheKey: cacheKey,
+                maxPixelSize: 360
+            )
+            isLoading = false
         }
     }
 }

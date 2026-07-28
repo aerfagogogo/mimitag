@@ -1873,8 +1873,20 @@ extension ConversationDataFlowTests {
             XCTAssertNil(payload.retryable)
             XCTAssertEqual(meta.sessionID, "thr_demo")
             XCTAssertEqual(meta.turnID, "turn_demo")
+            XCTAssertNil(meta.itemID)
         } else {
             XCTFail("Expected error")
+        }
+
+        let nestedItemError = try decodeAppServerNotification(#"{"method":"error","params":{"threadId":"thr_demo","turnId":"turn_demo","error":{"message":"Skill runtime exception","code":"tool_call_failed","item":{"id":"tool_88","namespace":"browser","tool":"open"}}}"#)
+        if case .error(let payload, let meta) = try XCTUnwrap(projector.project(nestedItemError)) {
+            XCTAssertEqual(payload.message, "Skill runtime exception")
+            XCTAssertEqual(payload.code, "tool_call_failed")
+            XCTAssertEqual(meta.itemID, "tool_88")
+            XCTAssertEqual(meta.sessionID, "thr_demo")
+            XCTAssertEqual(meta.turnID, "turn_demo")
+        } else {
+            XCTFail("Expected nested item error")
         }
 
         let retrying = try decodeAppServerNotification(

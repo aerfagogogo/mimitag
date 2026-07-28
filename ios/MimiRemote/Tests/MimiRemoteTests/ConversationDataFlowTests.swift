@@ -2172,6 +2172,59 @@ final class ConversationDataFlowTests: XCTestCase {
         }
     }
 
+    func testEventReducerTurnStartedClearsGlobalErrorBanner() async {
+        let output = await EventReducer().reduce(
+            .turnStarted(
+                AgentEventMetadata(
+                    seq: 70,
+                    sessionID: "thr_clear",
+                    turnID: "turn_clear",
+                    itemID: nil,
+                    messageID: nil,
+                    clientMessageID: nil,
+                    revision: nil,
+                    createdAt: nil
+                )
+            ),
+            fallbackSessionID: "fallback_thread",
+            outputIdleClearDelay: 0
+        )
+
+        XCTAssertNil(output.errorMessage)
+    }
+
+    func testEventReducerItemScopedErrorDoesNotOverrideGlobalErrorBanner() async {
+        let reducer = EventReducer()
+        let metadata = AgentEventMetadata(
+            seq: 66,
+            sessionID: "thread_with_tool",
+            turnID: "turn_with_tool",
+            itemID: "tool_call_001",
+            messageID: nil,
+            clientMessageID: nil,
+            revision: nil,
+            createdAt: nil
+        )
+
+        let output = await reducer.reduce(
+            .error(
+                AgentErrorPayload(
+                    message: "Skill runtime exception: not found",
+                    code: "tool_call_failed",
+                    retryable: false
+                ),
+                metadata
+            ),
+            fallbackSessionID: "fallback_thread",
+            outputIdleClearDelay: 0
+        )
+
+        XCTAssertNil(output.errorMessage)
+        XCTAssertEqual(output.statusUpdates.first?.0, "thread_with_tool")
+        XCTAssertEqual(output.statusUpdates.first?.1, SessionStatus.failed.rawValue)
+        XCTAssertEqual(output.foregroundClears, ["thread_with_tool"])
+    }
+
     func testLargeDiffPanelItemsDeduplicateAndCollapseTail() throws {
         let fileChangePrefix = L10n.text("ui.file_changes_766e4292")
         let old = ConversationMessage(

@@ -3,13 +3,13 @@ import SwiftUI
 enum AppDestination: Hashable {
     case sessions
     case workspaces
+    case team
     case session(SessionID)
 }
 
 private enum AppSheetDestination: String, Identifiable {
     case newSession
     case settings
-    case team
 
     var id: String { rawValue }
 }
@@ -200,6 +200,8 @@ struct WorkbenchNavigationState: Equatable {
                 pendingSessionSelectionID = nil
             case .session(let sessionID):
                 route = .session(id: sessionID, source: Self.rootPage(for: tab))
+            case .team:
+                break
             }
             return effectForUserNavigation(to: destination, selectedSessionID: selectedSessionID)
 
@@ -221,6 +223,8 @@ struct WorkbenchNavigationState: Equatable {
                 pendingSessionSelectionID = nil
             case .session(let sessionID):
                 route = .session(id: sessionID, source: Self.rootPage(for: tab))
+            case .team:
+                break
             }
             return effectForUserNavigation(to: destination, selectedSessionID: selectedSessionID)
 
@@ -243,6 +247,8 @@ struct WorkbenchNavigationState: Equatable {
             applyRoot(.sessions, usesCompactNavigation: usesCompactNavigation)
         case .workspaces:
             applyRoot(.workspaces, usesCompactNavigation: usesCompactNavigation)
+        case .team:
+            selection = .team
         case .session(let sessionID):
             applySession(
                 sessionID,
@@ -333,6 +339,8 @@ struct WorkbenchNavigationState: Equatable {
             // selectSession 包含网络恢复，可能跨帧；记录在途 ID，阻止同一个 UI 事件链重复启动。
             pendingSessionSelectionID = sessionID
             return .selectSession(sessionID)
+        case .team:
+            return nil
         }
     }
 
@@ -438,10 +446,6 @@ struct UnifiedWorkbenchShell: View {
                     )
                 case .settings:
                     SettingsView(isInitialSetup: false)
-                case .team:
-                    NavigationStack {
-                        TeamConversationView()
-                    }
                 }
             }
             .onAppear {
@@ -665,6 +669,13 @@ struct UnifiedWorkbenchShell: View {
                         tokens: tokens,
                         layout: layout
                     )
+                    sidebarDestinationRow(
+                        destination: .team,
+                        title: L10n.text("ui.team"),
+                        systemImage: "person.3.sequence",
+                        tokens: tokens,
+                        layout: layout
+                    )
                 }
 
                 if !sessionStore.activeSessions.isEmpty {
@@ -769,12 +780,15 @@ struct UnifiedWorkbenchShell: View {
                 // 设置是全局配置，不改变当前会话或工作区选择。
                 presentedSheet = .settings
             },
-            onOpenTeam: {
-                presentedSheet = .team
-            },
             onNewSession: {
                 // 侧栏底部保留全局新建入口，和会话页右上角共用同一个创建流程。
                 presentedSheet = .newSession
+            },
+            onRefreshUsage: {
+                await sessionStore.refreshCodexUsage()
+                if sessionStore.hasClaudeRuntimeChannel {
+                    await sessionStore.refreshClaudeUsage()
+                }
             }
         )
     }
@@ -806,6 +820,8 @@ struct UnifiedWorkbenchShell: View {
         switch destination {
         case .sessions:
             sessionList(layout: layout)
+        case .team:
+            TeamConversationView()
         case .workspaces:
             workspaces(layout: layout)
         case .session:
@@ -822,6 +838,8 @@ struct UnifiedWorkbenchShell: View {
             }
         case .workspaces:
             workspaces(layout: layout)
+        case .team:
+            TeamConversationView()
         case .session:
             sessionDetail(layout: layout, tokens: tokens)
         }
@@ -1191,25 +1209,26 @@ struct WorkbenchSidebarDestinationButton: View {
 /// 全局配置放左侧，主创建动作放右侧；两端布局在侧栏高度变化时保持稳定。
 struct WorkbenchSidebarFooter: View {
     @EnvironmentObject private var themeStore: ThemeStore
+    @EnvironmentObject private var sessionStore: SessionStore
 
     let tokens: ThemeTokens
     let bottomSafeAreaInset: CGFloat
     let onOpenSettings: () -> Void
-    let onOpenTeam: () -> Void
     let onNewSession: () -> Void
+    let onRefreshUsage: () async -> Void
 
     init(
         tokens: ThemeTokens,
         bottomSafeAreaInset: CGFloat = 0,
         onOpenSettings: @escaping () -> Void,
-        onOpenTeam: @escaping () -> Void,
-        onNewSession: @escaping () -> Void
+        onNewSession: @escaping () -> Void,
+        onRefreshUsage: @escaping () async -> Void
     ) {
         self.tokens = tokens
         self.bottomSafeAreaInset = bottomSafeAreaInset
         self.onOpenSettings = onOpenSettings
-        self.onOpenTeam = onOpenTeam
         self.onNewSession = onNewSession
+        self.onRefreshUsage = onRefreshUsage
     }
 
     var body: some View {
@@ -1234,21 +1253,30 @@ struct WorkbenchSidebarFooter: View {
             .accessibilityLabel(L10n.text("ui.open_settings"))
             .accessibilityIdentifier("sidebar.settings")
 
-            Button(action: onOpenTeam) {
-                Label(L10n.text("ui.team"), systemImage: "person.3.sequence")
-                    .font(themeStore.uiFont(.subheadline, weight: .medium))
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
+            Button {
+                Task { await onRefreshUsage() }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("模型额度")
+                        .font(themeStore.uiFont(.caption, weight: .semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(tokens.tertiaryText)
+
+                    Text("Codex: \(sessionStore.accountCodexUsageWindowsDisplay.creditText)")
+                        .font(themeStore.uiFont(.caption2, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .foregroundStyle(tokens.primaryText)
+
+                    Text("Claude: \(sessionStore.accountClaudeUsageWindowsDisplay.creditText)")
+                        .font(themeStore.uiFont(.caption2))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .foregroundStyle(tokens.secondaryText)
+                }
             }
             .buttonStyle(.plain)
-            .foregroundStyle(tokens.secondaryText)
-            .background(tokens.surface.opacity(0.72), in: Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(tokens.border.opacity(0.6), lineWidth: 1)
-            }
-            .accessibilityLabel(L10n.text("ui.open_agent_team"))
-            .accessibilityIdentifier("sidebar.team")
+            .frame(minHeight: 56)
 
             Spacer(minLength: 0)
 
