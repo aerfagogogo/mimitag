@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MANIFEST="$ROOT_DIR/ios/MimiRemote/Resources/PrivacyInfo.xcprivacy"
-PROJECT="$ROOT_DIR/ios/MimiRemote/MimiRemote.xcodeproj/project.pbxproj"
-SPEC="$ROOT_DIR/ios/MimiRemote/project.yml"
+MANIFEST="$ROOT_DIR/ios/mimitag/Resources/PrivacyInfo.xcprivacy"
+PROJECT="$ROOT_DIR/ios/mimitag/mimitag.xcodeproj/project.pbxproj"
+SPEC="$ROOT_DIR/ios/mimitag/project.yml"
 
 if ! command -v plutil >/dev/null 2>&1; then
   echo "隐私清单门禁失败：当前环境缺少 plutil。" >&2

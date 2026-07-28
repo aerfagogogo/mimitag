@@ -32,7 +32,7 @@ Mimi Remote 是第三方开源客户端，不是 OpenAI、Anthropic 或 Tailscal
 - 只有用户明确要求 Claude Code 时才启用该 Runtime；Claude 失败不能破坏 Codex 主通道或轮换现有 Token。
 - 升级、回滚或卸载前阅读 [安装、升级与回滚](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/install-upgrade-rollback.md)。
 - Claude 相关操作前阅读 [Claude bridge 架构](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/claude-bridge-architecture.md)。
-- iOS 构建、签名或真机部署前阅读 [iOS 开发说明](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/ios/MimiRemote/README.md)。
+- iOS 构建、签名或真机部署前阅读 [iOS 开发说明](https://github.com/aerfagogogo/mimitag/blob/main/ios/mimitag/README.md)。
 
 ## 确定操作范围
 
@@ -187,21 +187,21 @@ bash ./scripts/install-linux.sh install
 
 ```bash
 xcodegen generate \
-  --spec ios/MimiRemote/project.yml \
-  --project ios/MimiRemote
+  --spec ios/mimitag/project.yml \
+  --project ios/mimitag
 
 xcodebuild \
-  -project ios/MimiRemote/MimiRemote.xcodeproj \
-  -scheme MimiRemote \
+  -project ios/mimitag/mimitag.xcodeproj \
+  -scheme mimitag \
   -configuration Debug \
   -sdk iphoneos \
   CODE_SIGNING_ALLOWED=NO \
   build-for-testing
 
-open ios/MimiRemote/MimiRemote.xcodeproj
+open ios/mimitag/mimitag.xcodeproj
 ```
 
-让用户在 Xcode 中选择自己的 Development Team、已信任真机和 `MimiRemote` scheme。不要替用户选择未知 Team，不导出或上传签名证书，不关闭代码签名。
+让用户在 Xcode 中选择自己的 Development Team、已信任真机和 `mimitag` scheme。不要替用户选择未知 Team，不导出或上传签名证书，不关闭代码签名。
 
 ## 完成配对与验收
 
@@ -356,7 +356,7 @@ bash "$HOME/.local/share/mimi-remote/install-linux.sh" rollback
 - Mac 菜单栏 App：[Mimi Remote Mac](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/macos/MimiRemoteMac/README.md)
 - 安装、升级、停止和回滚：[install-upgrade-rollback.md](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/install-upgrade-rollback.md)
 - Claude Runtime 生命周期和权限：[claude-bridge-architecture.md](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/claude-bridge-architecture.md)
-- iOS 构建和验收：[iOS 开发说明](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/ios/MimiRemote/README.md)
+- iOS 构建和验收：[iOS 开发说明](https://github.com/aerfagogogo/mimitag/blob/main/ios/mimitag/README.md)
 - Codex 协议边界：[codex-protocol-support.md](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/codex-protocol-support.md)
 - Tailscale 运维：[tailscale-peer-relay-ops.md](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/tailscale-peer-relay-ops.md)
 - 支持和去敏：[support.md](https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/support.md)

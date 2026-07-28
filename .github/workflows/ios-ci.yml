@@ -3,7 +3,7 @@ name: iOS CI
 on:
   pull_request:
     paths:
-      - "ios/MimiRemote/**"
+      - "ios/mimitag/**"
       - "scripts/test-conversation-regressions.sh"
       - "scripts/test-ios-localization-smoke.sh"
       - "scripts/check-ios-localization.sh"
@@ -20,7 +20,7 @@ on:
     branches:
       - main
     paths:
-      - "ios/MimiRemote/**"
+      - "ios/mimitag/**"
       - "scripts/test-conversation-regressions.sh"
       - "scripts/test-ios-localization-smoke.sh"
       - "scripts/check-ios-localization.sh"
@@ -55,7 +55,7 @@ concurrency:
 
 jobs:
   conversation-regressions:
-    # MimiRemote 的最低版本是 iOS 26；macos-26 runner 默认提供稳定版 Xcode 26 和 iOS 26 Simulator。
+    # mimitag 的最低版本是 iOS 26；macos-26 runner 默认提供稳定版 Xcode 26 和 iOS 26 Simulator。
     runs-on: macos-26
     timeout-minutes: 35
     steps:
@@ -103,7 +103,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     env:
-      IOS_BUNDLE_ID: com.gaixianggeng.mimi
+      IOS_BUNDLE_ID: com.sunyiting.mimitag
       DEVELOPMENT_TEAM: 9HZ89R58PZ
       TESTFLIGHT_BETA_GROUP_ID: 26b7c973-b94f-46d5-b300-1c252fd6fdb1
       IOS_TESTFLIGHT_UPLOAD: "1"

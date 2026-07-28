@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INFO_PLIST="$ROOT_DIR/ios/MimiRemote/Resources/Info.plist"
+INFO_PLIST="$ROOT_DIR/ios/mimitag/Resources/Info.plist"
 
 plutil -lint "$INFO_PLIST" >/dev/null
 

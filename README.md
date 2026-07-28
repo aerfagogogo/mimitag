@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="ios/MimiRemote/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-ios-marketing-1024x1024@1x.png" alt="Mimi Remote app icon" width="112" />
+  <img src="ios/mimitag/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-ios-marketing-1024x1024@1x.png" alt="mimitag app icon" width="112" />
 </p>
 
 <h1 align="center">Mimi Remote</h1>
@@ -16,14 +16,14 @@
 <p align="center">
   <a href="README.zh-CN.md">中文文档</a>
   &nbsp;·&nbsp;
-  <a href="ios/MimiRemote/README.md">iOS build guide</a>
+  <a href="ios/mimitag/README.md">iOS build guide</a>
   &nbsp;·&nbsp;
   <a href="docs/project-status.md">Project status (Chinese)</a>
 </p>
 
 <p align="center">
-  <a href="ios/MimiRemote/README.md"><img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-26%2B-black?logo=apple" alt="iOS and iPadOS 26 or later" /></a>
-  <a href="ios/MimiRemote"><img src="https://img.shields.io/badge/SwiftUI-native-F05138?logo=swift&amp;logoColor=white" alt="Native SwiftUI app" /></a>
+  <a href="ios/mimitag/README.md"><img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-26%2B-black?logo=apple" alt="iOS and iPadOS 26 or later" /></a>
+  <a href="ios/mimitag"><img src="https://img.shields.io/badge/SwiftUI-native-F05138?logo=swift&amp;logoColor=white" alt="Native SwiftUI app" /></a>
   <a href="https://github.com/gaixianggeng/codex-ipad-agent/actions/workflows/go-ci.yml"><img src="https://github.com/gaixianggeng/codex-ipad-agent/actions/workflows/go-ci.yml/badge.svg" alt="Go CI status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3%20%2B%20Store%20Exception-blue.svg" alt="GPLv3 with store distribution exception" /></a>
 </p>
@@ -194,20 +194,20 @@ Mimi Remote requires iOS/iPadOS 26 or later. Install XcodeGen before generating 
 brew install xcodegen
 
 xcodegen generate \
-  --spec ios/MimiRemote/project.yml \
-  --project ios/MimiRemote
+  --spec ios/mimitag/project.yml \
+  --project ios/mimitag
 
-open ios/MimiRemote/MimiRemote.xcodeproj
+open ios/mimitag/mimitag.xcodeproj
 ```
 
-In Xcode, select the `MimiRemote` scheme, your development team, and an iPhone or iPad target, then Run. On first launch, scan the QR code printed by `agentd up` or `agentd pair`. The QR code is a short-lived, single-use pairing ticket, not a long-lived token. Manual connection is available as a fallback.
+In Xcode, select the `mimitag` scheme, your development team, and an iPhone or iPad target, then Run. On first launch, scan the QR code printed by `agentd up` or `agentd pair`. The QR code is a short-lived, single-use pairing ticket, not a long-lived token. Manual connection is available as a fallback.
 
 Command-line build verification:
 
 ```bash
 xcodebuild \
-  -project ios/MimiRemote/MimiRemote.xcodeproj \
-  -scheme MimiRemote \
+  -project ios/mimitag/mimitag.xcodeproj \
+  -scheme mimitag \
   -configuration Debug \
   -sdk iphoneos \
   CODE_SIGNING_ALLOWED=NO \
@@ -337,7 +337,7 @@ cargo test --locked \
 ## Repository layout
 
 ```text
-ios/MimiRemote/          SwiftUI iPhone / iPad app
+ios/mimitag/          SwiftUI iPhone / iPad app
 cmd/agentd/ + internal/  Go safety gateway and Codex / Claude control plane
 bridges/claude/          Rust Claude Code protocol bridge
 ```

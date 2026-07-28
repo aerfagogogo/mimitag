@@ -9,22 +9,22 @@ failed=0
 # 例外必须精确到文件并写明原因，禁止使用目录或通配符绕过门禁。
 exception_reason() {
   case "$1" in
-    ios/MimiRemote/Tests/MimiRemoteTests/ConversationSessionStoreTests.swift)
+    ios/mimitag/Tests/mimitagTests/ConversationSessionStoreTests.swift)
       printf '%s' '历史会话状态回归矩阵，后续按恢复、审批和消息域拆分'
       ;;
-    ios/MimiRemote/Tests/MimiRemoteTests/ConversationComposerHistoryTests.swift)
+    ios/mimitag/Tests/mimitagTests/ConversationComposerHistoryTests.swift)
       printf '%s' 'Composer 历史交互回归矩阵，后续按输入与历史导航场景拆分'
       ;;
-    ios/MimiRemote/Tests/MimiRemoteTests/ConversationDataFlowTests.swift)
+    ios/mimitag/Tests/mimitagTests/ConversationDataFlowTests.swift)
       printf '%s' '会话数据流回归矩阵，后续按流式事件、审批和附件场景拆分'
       ;;
-    ios/MimiRemote/Tests/MimiRemoteTests/ConversationWorkspaceHistoryTests.swift)
+    ios/mimitag/Tests/mimitagTests/ConversationWorkspaceHistoryTests.swift)
       printf '%s' 'Workspace 历史回归矩阵，后续按目录解析与会话恢复场景拆分'
       ;;
-    ios/MimiRemote/Sources/Core/API/CodexAppServerSessionRuntime.swift)
+    ios/mimitag/Sources/Core/API/CodexAppServerSessionRuntime.swift)
       printf '%s' 'Codex 协议兼容运行时，后续按连接、请求和事件处理职责拆分'
       ;;
-    ios/MimiRemote/Sources/Core/Models/AgentModels.swift)
+    ios/mimitag/Sources/Core/Models/AgentModels.swift)
       printf '%s' '跨版本协议兼容模型集合，后续按会话、工具和账户模型拆分'
       ;;
     internal/httpapi/appserver_gateway_test.go)
@@ -33,10 +33,10 @@ exception_reason() {
     internal/httpapi/router_test.go)
       printf '%s' 'HTTP 路由回归矩阵，后续按配对、项目和运行时端点拆分'
       ;;
-    ios/MimiRemote/Sources/State/SessionStoreConnection.swift)
+    ios/mimitag/Sources/State/SessionStoreConnection.swift)
       printf '%s' '会话连接、事件归并与本地状态兼容逻辑，后续按连接生命周期和状态职责拆分'
       ;;
-    ios/MimiRemote/Sources/State/SessionStoreHistory.swift)
+    ios/mimitag/Sources/State/SessionStoreHistory.swift)
       printf '%s' '会话创建、历史加载与列表恢复逻辑，后续按历史分页、列表和恢复职责拆分'
       ;;
     *) return 1 ;;

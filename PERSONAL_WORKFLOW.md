@@ -15,7 +15,7 @@
 - Tests Bundle ID：`com.sunyiting.mimiremoteTests`
 - UI Tests Bundle ID：`com.sunyiting.mimiremoteUITests`
 
-`ios/MimiRemote/project.yml` 是签名和 Bundle ID 的配置来源；重新生成 Xcode
+`ios/mimitag/project.yml` 是签名和 Bundle ID 的配置来源；重新生成 Xcode
 工程时要同时保留它，不能只改 `.xcodeproj`。
 
 ## 平时编译
@@ -24,7 +24,7 @@
 git switch personal/stable
 ```
 
-然后打开 `ios/MimiRemote/MimiRemote.xcodeproj`，选择自己的 iPhone 或 iPad，
+然后打开 `ios/mimitag/mimitag.xcodeproj`，选择自己的 iPhone 或 iPad，
 点击 Xcode 的运行按钮。
 
 ## 跟进原作者更新

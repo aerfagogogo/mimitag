@@ -10,7 +10,7 @@ import plistlib
 import re
 import sys
 
-root = Path("ios/MimiRemote")
+root = Path("ios/mimitag")
 catalog_path = root / "Resources/Localizable.xcstrings"
 allowlist_path = root / "Resources/LocalizationTechnicalStringAllowlist.json"
 
@@ -419,7 +419,7 @@ PY
 catalog_output_directory="$(mktemp -d)"
 trap 'rm -rf "$catalog_output_directory"' EXIT
 xcrun xcstringstool compile \
-  ios/MimiRemote/Resources/Localizable.xcstrings \
+  ios/mimitag/Resources/Localizable.xcstrings \
   --output-directory "$catalog_output_directory" \
   --language en \
   --language zh-Hans >/dev/null

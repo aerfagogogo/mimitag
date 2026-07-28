@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="ios/MimiRemote/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-ios-marketing-1024x1024@1x.png" alt="Mimi Remote App 图标" width="112" />
+  <img src="ios/mimitag/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-ios-marketing-1024x1024@1x.png" alt="mimitag App 图标" width="112" />
 </p>
 
 <h1 align="center">Mimi Remote</h1>
@@ -24,8 +24,8 @@
 </p>
 
 <p align="center">
-  <a href="ios/MimiRemote/README.md"><img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-26%2B-black?logo=apple" alt="要求 iOS 或 iPadOS 26 及以上版本" /></a>
-  <a href="ios/MimiRemote"><img src="https://img.shields.io/badge/SwiftUI-native-F05138?logo=swift&amp;logoColor=white" alt="原生 SwiftUI App" /></a>
+  <a href="ios/mimitag/README.md"><img src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-26%2B-black?logo=apple" alt="要求 iOS 或 iPadOS 26 及以上版本" /></a>
+  <a href="ios/mimitag"><img src="https://img.shields.io/badge/SwiftUI-native-F05138?logo=swift&amp;logoColor=white" alt="原生 SwiftUI App" /></a>
   <a href="https://github.com/gaixianggeng/codex-ipad-agent/actions/workflows/go-ci.yml"><img src="https://github.com/gaixianggeng/codex-ipad-agent/actions/workflows/go-ci.yml/badge.svg" alt="Go CI 状态" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3%20%2B%20Store%20Exception-blue.svg" alt="GPLv3 与商店分发例外" /></a>
 </p>
@@ -208,13 +208,13 @@ https://github.com/gaixianggeng/codex-ipad-agent/tree/main/packaging/skill/insta
 
 ```bash
 xcodegen generate \
-  --spec ios/MimiRemote/project.yml \
-  --project ios/MimiRemote
+  --spec ios/mimitag/project.yml \
+  --project ios/mimitag
 
-open ios/MimiRemote/MimiRemote.xcodeproj
+open ios/mimitag/mimitag.xcodeproj
 ```
 
-在 Xcode 中选择 `MimiRemote` scheme、开发者 Team 和目标 iPhone / iPad 后运行。工程要求 iOS / iPadOS 26 或更高版本。
+在 Xcode 中选择 `mimitag` scheme、开发者 Team 和目标 iPhone / iPad 后运行。工程要求 iOS / iPadOS 26 或更高版本。
 
 Mac App 用户从菜单栏选择“配对设备…”，CLI 用户扫描 `agentd up` 或 `agentd pair` 显示的二维码。二维码使用短期、单次兑换票据，不直接包含长期 Token；扫码不可用时可以展开高级手动连接。
 
@@ -301,19 +301,19 @@ macOS 没有可由后台服务自动申请的“整个当前用户目录”单�
 
 ```bash
 xcodegen generate \
-  --spec ios/MimiRemote/project.yml \
-  --project ios/MimiRemote
+  --spec ios/mimitag/project.yml \
+  --project ios/mimitag
 
 xcodebuild \
-  -project ios/MimiRemote/MimiRemote.xcodeproj \
-  -scheme MimiRemote \
+  -project ios/mimitag/mimitag.xcodeproj \
+  -scheme mimitag \
   -configuration Debug \
   -sdk iphoneos \
   CODE_SIGNING_ALLOWED=NO \
   build-for-testing
 ```
 
-iOS 工程结构、Catalyst 和真机验收见 [iOS 开发说明](ios/MimiRemote/README.md)。
+iOS 工程结构、Catalyst 和真机验收见 [iOS 开发说明](ios/mimitag/README.md)。
 
 ### Claude bridge
 
@@ -357,7 +357,7 @@ cargo test --locked -p alleycat-claude-bridge
 源码目录保持语言和职责清晰，同时避免为目录整齐大规模改写稳定构建路径：
 
 ```text
-ios/MimiRemote/          SwiftUI iPhone / iPad App
+ios/mimitag/          SwiftUI iPhone / iPad App
 cmd/agentd/ + internal/  Go 安全网关与 Codex / Claude 控制面
 bridges/claude/          Rust Claude Code 协议 bridge
 ```

@@ -24,9 +24,9 @@ fi
 
 echo "==> iOS English localization smoke"
 xcodebuild test -quiet \
-  -project ios/MimiRemote/MimiRemote.xcodeproj \
-  -scheme MimiRemote \
+  -project ios/mimitag/mimitag.xcodeproj \
+  -scheme mimitag \
   -destination "$resolved_destination" \
   -testLanguage en \
   -testRegion US \
-  -only-testing:MimiRemoteTests/LocalizationTests
+  -only-testing:mimitagTests/LocalizationTests

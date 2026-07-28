@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 NOTICES="THIRD_PARTY_NOTICES.md"
-PACKAGE_RESOLVED="ios/MimiRemote/MimiRemote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+PACKAGE_RESOLVED="ios/mimitag/mimitag.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 
 for command_name in go ruby rg awk; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -95,10 +95,10 @@ validate_swift_license_checksum() {
     "swift-markdown|0.8.0") expected="a287d3f38552a2b7c9264319761b03d49e1ab1c5c11ebbe4ed68328b45555e88" ;;
     "swift-markdown NOTICE|0.8.0") expected="d111b6caf5376721efa735dc47069c2fc9b245ecbc3c7ada8c59d6c823141e30" ;;
     "swift-cmark|0.8.0") expected="883fd19b75bad9ff8b1ef0ce3e98e909b46cced8f85f2b06c6fc5b655014fa4e" ;;
-    "swift-syntax|603.0.1") expected="2245a990b635558be210fb3eb4f8a6f7a49aebc0fefbf5859146a65ddc7ddcf3" ;;
-    "swift-snapshot-testing|1.19.2") expected="ae6b29268a507436557b16fd0a071bcb01398926b748ebf41e07f01a689189f5" ;;
-    "swift-custom-dump|1.6.0") expected="499cab523b8faf078485e35f6bf917c061b51cb8ab284569811c02e4f5622056" ;;
-    "xctest-dynamic-overlay|1.9.0") expected="499cab523b8faf078485e35f6bf917c061b51cb8ab284569811c02e4f5622056" ;;
+    "swift-syntax|603.0.2") expected="2245a990b635558be210fb3eb4f8a6f7a49aebc0fefbf5859146a65ddc7ddcf3" ;;
+    "swift-snapshot-testing|1.19.3") expected="ae6b29268a507436557b16fd0a071bcb01398926b748ebf41e07f01a689189f5" ;;
+    "swift-custom-dump|1.6.1") expected="499cab523b8faf078485e35f6bf917c061b51cb8ab284569811c02e4f5622056" ;;
+    "xctest-dynamic-overlay|1.11.0") expected="499cab523b8faf078485e35f6bf917c061b51cb8ab284569811c02e4f5622056" ;;
     *)
       echo "第三方许可门禁失败：$identity $version 缺少 pinned Swift 许可证摘要。" >&2
       exit 1
@@ -171,7 +171,7 @@ rg -Fq -- "THIRD_PARTY_NOTICES.md" .goreleaser.yml || {
 }
 
 if [[ -d ios ]]; then
-  rg -Fq -- "THIRD_PARTY_NOTICES.md in Resources" ios/MimiRemote/MimiRemote.xcodeproj/project.pbxproj || {
+  rg -Fq -- "THIRD_PARTY_NOTICES.md in Resources" ios/mimitag/mimitag.xcodeproj/project.pbxproj || {
     echo "第三方许可门禁失败：iOS App 未打包 THIRD_PARTY_NOTICES.md。" >&2
     exit 1
   }

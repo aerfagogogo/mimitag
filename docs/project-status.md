@@ -93,12 +93,12 @@ cargo test --locked \
 
 # iOS 工程
 xcodegen generate \
-  --spec ios/MimiRemote/project.yml \
-  --project ios/MimiRemote
+  --spec ios/mimitag/project.yml \
+  --project ios/mimitag
 
 xcodebuild \
-  -project ios/MimiRemote/MimiRemote.xcodeproj \
-  -scheme MimiRemote \
+  -project ios/mimitag/mimitag.xcodeproj \
+  -scheme mimitag \
   -configuration Debug \
   -sdk iphoneos \
   CODE_SIGNING_ALLOWED=NO \
@@ -112,7 +112,7 @@ Mimi TestFlight 使用本机 `git testflight-push`：先推送并核对远端 co
 - [根 README](../README.md)：安装、配置、开发和发布入口。
 - [P0 / P1 发布推进清单](p0-p1-roadmap.md)：发布门禁、当前完成度和外部阻断项。
 - [安装、升级与回滚](install-upgrade-rollback.md)：Mac/Linux 安装、凭据备份、升级验证和应急回滚。
-- [iOS README](../ios/MimiRemote/README.md)：iOS 工程结构、构建和验收。
+- [iOS README](../ios/mimitag/README.md)：iOS 工程结构、构建和验收。
 - [Claude bridge 架构](claude-bridge-architecture.md)：Claude 实验通道的进程生命周期、权限、状态和失败模式。
 - [Tailscale 运维](tailscale-peer-relay-ops.md)：跨网络 Endpoint、Peer Relay、验证和回滚。
 - [生产可达性审计](production-reachability-audit.md)：生产主链路与旧代码边界。

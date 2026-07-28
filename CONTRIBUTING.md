@@ -34,12 +34,12 @@ iOS 改动至少生成工程并完成无签名构建：
 
 ```bash
 xcodegen generate \
-  --spec ios/MimiRemote/project.yml \
-  --project ios/MimiRemote
+  --spec ios/mimitag/project.yml \
+  --project ios/mimitag
 
 xcodebuild \
-  -project ios/MimiRemote/MimiRemote.xcodeproj \
-  -scheme MimiRemote \
+  -project ios/mimitag/mimitag.xcodeproj \
+  -scheme mimitag \
   -configuration Debug \
   -sdk iphoneos \
   CODE_SIGNING_ALLOWED=NO \

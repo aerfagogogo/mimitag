@@ -65,7 +65,7 @@ for document in required_documents:
     if not document.is_file() or not document.read_text(encoding="utf-8").strip():
         errors.append(f"Missing or empty public/review document: {document}")
 
-link_source = Path("ios/MimiRemote/Sources/Core/AppExternalLinks.swift").read_text(encoding="utf-8")
+link_source = Path("ios/mimitag/Sources/Core/AppExternalLinks.swift").read_text(encoding="utf-8")
 for relative_path in ("privacy-policy.md", "terms-of-use.md", "support.md"):
     expected = f"https://github.com/gaixianggeng/codex-ipad-agent/blob/main/docs/{relative_path}"
     if expected not in link_source:
@@ -94,7 +94,7 @@ if re.search(r"\b100\.(?:6[4-9]|[78]\d|9\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b"
 if re.search(r"\b(?:sk-|github_pat_|gh[pousr]_)[A-Za-z0-9_-]{16,}\b", review_notes):
     errors.append("Review notes template contains a possible credential")
 
-project_spec = Path("ios/MimiRemote/project.yml").read_text(encoding="utf-8")
+project_spec = Path("ios/mimitag/project.yml").read_text(encoding="utf-8")
 if 'SWIFT_EMIT_LOC_STRINGS: "NO"' not in project_spec:
     errors.append("project.yml must disable automatic Swift string extraction")
 build_match = re.search(r'CURRENT_PROJECT_VERSION:\s*"(\d+)"', project_spec)

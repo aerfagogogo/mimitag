@@ -45,24 +45,24 @@ echo "==> iOS conversation regressions"
 # - PairingLinkTests：Endpoint allowlist、ATS 对应的 HTTP/HTTPS 传输策略。
 # - DoctorDiagnosticsTests：结构化 Doctor 响应、HTTP 错误和向后兼容。
 xcodebuild test -quiet \
-  -project ios/MimiRemote/MimiRemote.xcodeproj \
-  -scheme MimiRemote \
+  -project ios/mimitag/mimitag.xcodeproj \
+  -scheme mimitag \
   -destination "$resolved_destination" \
   -testLanguage zh-Hans \
   -testRegion CN \
-  -only-testing:MimiRemoteTests/AgentAPIClientRequestTests \
-  -only-testing:MimiRemoteTests/CodexAppServerProtocolTests \
-  -only-testing:MimiRemoteTests/ConversationDataFlowTests \
-  -only-testing:MimiRemoteTests/ConversationProcessGrouperTests \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testConversationBubbleAlignment \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testDefaultDarkConversationPalette \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testRichMarkdownConversationRendering \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testMixedActivityAndImageConversationRendering \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testUnavailableUserImageGalleryRemainsLegibleInLightTheme \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testSessionRuntimeBadgesInConversationList \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testProjectSessionDashboard \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testCommentaryAndTrailingProcessRendering \
-  -only-testing:MimiRemoteTests/ConversationSnapshotTests/testExpandedProcessGroupRendering \
-  -only-testing:MimiRemoteTests/MarkdownRenderingTests \
-  -only-testing:MimiRemoteTests/PairingLinkTests \
-  -only-testing:MimiRemoteTests/DoctorDiagnosticsTests
+  -only-testing:mimitagTests/AgentAPIClientRequestTests \
+  -only-testing:mimitagTests/CodexAppServerProtocolTests \
+  -only-testing:mimitagTests/ConversationDataFlowTests \
+  -only-testing:mimitagTests/ConversationProcessGrouperTests \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testConversationBubbleAlignment \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testDefaultDarkConversationPalette \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testRichMarkdownConversationRendering \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testMixedActivityAndImageConversationRendering \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testUnavailableUserImageGalleryRemainsLegibleInLightTheme \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testSessionRuntimeBadgesInConversationList \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testProjectSessionDashboard \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testCommentaryAndTrailingProcessRendering \
+  -only-testing:mimitagTests/ConversationSnapshotTests/testExpandedProcessGroupRendering \
+  -only-testing:mimitagTests/MarkdownRenderingTests \
+  -only-testing:mimitagTests/PairingLinkTests \
+  -only-testing:mimitagTests/DoctorDiagnosticsTests

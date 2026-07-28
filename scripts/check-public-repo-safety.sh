@@ -76,7 +76,7 @@ report_matches "发现不应进入仓库的凭据或签名产物" "$artifact_mat
 
 docs_paths=(README.md)
 [[ -d docs ]] && docs_paths+=(docs)
-[[ -f ios/MimiRemote/README.md ]] && docs_paths+=(ios/MimiRemote/README.md)
+[[ -f ios/mimitag/README.md ]] && docs_paths+=(ios/mimitag/README.md)
 private_endpoint_matches="$(rg -l --pcre2 \
   '100\.(?!64\.0\.0/10(?:[^0-9]|$))(6[4-9]|[78][0-9]|9[0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}' \
   "${docs_paths[@]}" || true)"

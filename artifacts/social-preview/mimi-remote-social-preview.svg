@@ -35,7 +35,7 @@
     <rect x="72" y="58" width="70" height="70" rx="16" fill="#ffffff"/>
     <image x="72" y="58" width="70" height="70" preserveAspectRatio="xMidYMid slice"
       clip-path="url(#icon-clip)"
-      xlink:href="../../ios/MimiRemote/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-ios-marketing-1024x1024@1x.png"/>
+      xlink:href="../../ios/mimitag/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-ios-marketing-1024x1024@1x.png"/>
   </g>
   <text x="163" y="101" fill="#dce8ff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="26" font-weight="700" letter-spacing="2">MIMI REMOTE</text>
 

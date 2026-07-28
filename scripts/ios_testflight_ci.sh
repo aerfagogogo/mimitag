@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$ROOT_DIR/ios/MimiRemote/MimiRemote.xcodeproj"
-SCHEME="MimiRemote"
-IOS_BUNDLE_ID="${IOS_BUNDLE_ID:-com.gaixianggeng.mimi}"
+PROJECT="$ROOT_DIR/ios/mimitag/mimitag.xcodeproj"
+SCHEME="mimitag"
+IOS_BUNDLE_ID="${IOS_BUNDLE_ID:-com.sunyiting.mimitag}"
 IOS_TESTFLIGHT_UPLOAD="${IOS_TESTFLIGHT_UPLOAD:-1}"
 IOS_TESTFLIGHT_VALIDATE="${IOS_TESTFLIGHT_VALIDATE:-0}"
 TESTFLIGHT_WHATS_NEW="${TESTFLIGHT_WHATS_NEW:-}"
@@ -96,7 +96,7 @@ build_number="$(printf '%s\n' "$preflight" | awk -F= '/^ASC_SUGGESTED_BUILD_NUMB
 [[ "$build_number" =~ ^[0-9]+$ ]] || fail "suggested build number must be an integer"
 
 output="$RUNNER_TEMP/mimi-testflight/$marketing_version-$build_number"
-archive="$output/MimiRemote.xcarchive"
+archive="$output/mimitag.xcarchive"
 export_path="$output/export"
 export_options="$output/ExportOptions.plist"
 rm -rf "$output"
@@ -134,7 +134,7 @@ xcodebuild archive \
   OTHER_CODE_SIGN_FLAGS="--keychain $IOS_SIGNING_KEYCHAIN_PATH" \
   -quiet
 
-archive_info="$archive/Products/Applications/MimiRemote.app/Info.plist"
+archive_info="$archive/Products/Applications/mimitag.app/Info.plist"
 [[ -f "$archive_info" ]] || fail "archive app Info.plist not found"
 [[ "$(plutil -extract CFBundleIdentifier raw -o - "$archive_info")" == "$IOS_BUNDLE_ID" ]] || fail "archive bundle id mismatch"
 [[ "$(plutil -extract CFBundleShortVersionString raw -o - "$archive_info")" == "$marketing_version" ]] || fail "archive version mismatch"

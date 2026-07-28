@@ -4,7 +4,7 @@
 
 本文件随 Mimi Remote 源码、`agentd` 发布压缩包和 iOS App 一起分发，用于保留直接依赖及其已解析依赖的版权声明、NOTICE 和许可证正文。
 
-Go 依赖版本以 `go.mod`、`go.sum` 为准；源码树包含 iOS 客户端时，其依赖版本再以 `ios/MimiRemote/MimiRemote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` 为准。测试依赖不会进入正式运行时，但仍在这里保留声明，方便源码分发和审计。
+Go 依赖版本以 `go.mod`、`go.sum` 为准；源码树包含 iOS 客户端时，其依赖版本再以 `ios/mimitag/mimitag.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` 为准。测试依赖不会进入正式运行时，但仍在这里保留声明，方便源码分发和审计。
 
 ## 依赖清单
 
@@ -19,10 +19,10 @@ Go 依赖版本以 `go.mod`、`go.sum` 为准；源码树包含 iOS 客户端时
 | `swift-markdown` | `0.8.0` | iOS 运行时 |
 | `swift-markdown NOTICE` | `0.8.0` | iOS 运行时归属声明 |
 | `swift-cmark` | `0.8.0` | iOS 运行时 |
-| `swift-syntax` | `603.0.1` | iOS 解析/构建依赖 |
-| `swift-snapshot-testing` | `1.19.2` | iOS 测试 |
-| `swift-custom-dump` | `1.6.0` | iOS 测试 |
-| `xctest-dynamic-overlay` | `1.9.0` | iOS 测试 |
+| `swift-syntax` | `603.0.2` | iOS 解析/构建依赖 |
+| `swift-snapshot-testing` | `1.19.3` | iOS 测试 |
+| `swift-custom-dump` | `1.6.1` | iOS 测试 |
+| `xctest-dynamic-overlay` | `1.11.0` | iOS 测试 |
 
 ## 许可证正文
 
@@ -655,7 +655,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### swift-syntax 603.0.1
+### swift-syntax 603.0.2
 
 使用范围：iOS 解析/构建依赖
 
@@ -873,7 +873,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     otherwise be required by Sections 4(a), 4(b) and 4(d) of the License.
 ```
 
-### swift-snapshot-testing 1.19.2
+### swift-snapshot-testing 1.19.3
 
 使用范围：iOS 测试
 
@@ -901,7 +901,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### swift-custom-dump 1.6.0
+### swift-custom-dump 1.6.1
 
 使用范围：iOS 测试
 
@@ -929,7 +929,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### xctest-dynamic-overlay 1.9.0
+### xctest-dynamic-overlay 1.11.0
 
 使用范围：iOS 测试
 
