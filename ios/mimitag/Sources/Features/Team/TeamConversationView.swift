@@ -45,6 +45,7 @@ struct TeamConversationView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 10) {
+                    teamSessionPicker(tokens: tokens)
                     workspaceMenu(tokens: tokens)
                     Button {
                         Task { await teamStore.load() }
@@ -112,13 +113,40 @@ struct TeamConversationView: View {
                         }
                     }
                 }
+                }
             }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(tokens.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(tokens.border.opacity(0.6)).frame(height: 1)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(tokens.surface)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(tokens.border.opacity(0.6)).frame(height: 1)
+            }
+    }
+
+    private func teamSessionPicker(tokens: ThemeTokens) -> some View {
+        let pickerLabel = Label(
+            teamStore.selectedSession?.title ?? L10n.text("ui.team"),
+            systemImage: "person.3.sequence.fill"
+        )
+        .font(themeStore.uiFont(.caption2, weight: .semibold))
+        .foregroundStyle(tokens.secondaryText)
+        .lineLimit(1)
+
+        return Group {
+            if teamStore.sessions.count > 1 {
+                Menu {
+                    ForEach(teamStore.sessions) { session in
+                        Button(session.title) {
+                            teamStore.openSession(session)
+                        }
+                    }
+                } label: {
+                    pickerLabel
+                }
+                .accessibilityLabel(L10n.text("ui.team"))
+            } else {
+                pickerLabel
+            }
         }
     }
 

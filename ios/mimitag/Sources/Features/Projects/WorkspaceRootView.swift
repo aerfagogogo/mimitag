@@ -484,7 +484,10 @@ struct WorkspaceRootView: View {
     }
 
     private func combinedSessions(for projectID: String) -> [AgentSession] {
-        (sessionStore.sessions(forProjectID: projectID) + teamStore.sessionIndexEntries(projectID: projectID))
+        (sessionStore.sessions(forProjectID: projectID) +
+         teamStore
+            .sessionIndexEntries(projectID: projectID)
+            .filter { $0.runtimeProvider != "team" })
             .sorted {
                 SessionIndexStore.orderingDate(for: $0) > SessionIndexStore.orderingDate(for: $1)
             }
