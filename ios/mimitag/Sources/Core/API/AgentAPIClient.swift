@@ -287,6 +287,15 @@ struct AgentAPIClient {
         try await request(path: "/api/version", method: "GET", body: Optional<Data>.none)
     }
 
+    func runtimeStatus(timeout: TimeInterval = 5) async throws -> RuntimeStatusResponse {
+        try await request(
+            path: "/api/runtime/status",
+            method: "GET",
+            body: Optional<Data>.none,
+            timeout: timeout
+        )
+    }
+
     func appServerConfig(timeout: TimeInterval = 20) async throws -> CodexAppServerConfigResponse {
         try await request(
             path: "/api/app-server/config",

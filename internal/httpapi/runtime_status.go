@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -229,10 +230,8 @@ func (r *Router) runtimeStatusHandler(w http.ResponseWriter, req *http.Request) 
 		methodNotAllowed(w)
 		return
 	}
-	if !runtimeStatusLoopbackRequest(req) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
+	// 路由外层已经要求配对 Token；响应只包含脱敏后的运行时和额度窗口，
+	// 允许 iPhone/iPad 与 Mac 菜单栏共享同一份权威状态。
 	writeJSON(w, http.StatusOK, r.runtimeStatus.Snapshot())
 }
 
@@ -308,16 +307,6 @@ func (r *Router) runtimeStatusPlaceholder() runtimeStatusResponse {
 			claude,
 		},
 	}
-}
-
-func runtimeStatusLoopbackRequest(req *http.Request) bool {
-	remote := strings.TrimSpace(req.RemoteAddr)
-	host, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		host = strings.Trim(remote, "[]")
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func (r *Router) probeCodexRuntime(ctx context.Context) runtimeAccountStatus {
@@ -422,6 +411,24 @@ func (r *Router) probeClaudeRuntime(ctx context.Context) runtimeAccountStatus {
 	if !probe.Healthy {
 		return status
 	}
+	if claudeAPIKeyConfigured(r.cfg.Claude.Env) {
+		// API Key 是按量付费身份，不能混入同一台 Mac 上 OAuth 订阅的额度缓存。
+		status.Version = probe.Version
+		status.State = runtimeStateAvailable
+		status.AuthMode = "api_key"
+		status.Reason = "api_key_configured_unverified"
+		return status
+	}
+	if cached := readClaudeOAuthUsageCache(time.Now()); cached != nil {
+		// Claude bridge 的 app-server 协议不稳定地提供 rateLimits/read。优先读取
+		// Vibe Island 已通过 Anthropic 官方 OAuth usage API 刷新的脱敏缓存：
+		// 只消费百分比和重置时间，不读取、不复制任何 OAuth Token。
+		status.Version = probe.Version
+		status.State = runtimeStateConnected
+		status.AuthMode = "oauth"
+		status.RateLimits = cached
+		return status
+	}
 	bin := firstNonEmpty(probe.Path, strings.TrimSpace(r.cfg.Claude.BridgeBin))
 	ensureResult := make(chan error, 1)
 	go func() {
@@ -464,15 +471,6 @@ func (r *Router) probeClaudeRuntime(ctx context.Context) runtimeAccountStatus {
 	status.State = runtimeStateAvailable
 	status.Reason = ""
 
-	if claudeAPIKeyConfigured(r.cfg.Claude.Env) {
-		// bridge 只会收到 cfg.Claude.Env 中显式配置的 API Key。Key 的存在表示
-		// “已配置”而不是“已验证”。API Key 是按量计费身份，不能查询并混入
-		// 同一台 Mac 上残留的 OAuth 订阅额度。
-		status.AuthMode = "api_key"
-		status.Reason = "api_key_configured_unverified"
-		return status
-	}
-
 	var limits runtimeRateLimitsEnvelope
 	if err := client.Call(ctx, "account/rateLimits/read", map[string]any{}, &limits); err == nil {
 		status.RateLimits = normalizeRuntimeRateLimits(limits, "claude")
@@ -485,6 +483,105 @@ func (r *Router) probeClaudeRuntime(ctx context.Context) runtimeAccountStatus {
 		status.AuthMode = "oauth"
 	}
 	return status
+}
+
+type claudeOAuthUsageCache struct {
+	FiveHour *claudeOAuthUsageWindow `json:"five_hour"`
+	SevenDay *claudeOAuthUsageWindow `json:"seven_day"`
+	Fetched  *float64                `json:"fetched_at"`
+}
+
+type claudeOAuthUsageWindow struct {
+	Utilization    *float64        `json:"utilization"`
+	UsedPercentage *float64        `json:"used_percentage"`
+	ResetsAt       json.RawMessage `json:"resets_at"`
+}
+
+func readClaudeOAuthUsageCache(now time.Time) *runtimeRateLimits {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return nil
+	}
+	paths := []string{
+		filepath.Join(home, ".vibe-island", "cache", "anthropic-oauth-usage.json"),
+		filepath.Join(home, ".vibe-island", "cache", "usage-persist-anthropic.json"),
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil || now.Sub(info.ModTime()) > 2*time.Hour {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil || len(raw) == 0 || len(raw) > 1<<20 {
+			continue
+		}
+		var cache claudeOAuthUsageCache
+		if json.Unmarshal(raw, &cache) != nil {
+			continue
+		}
+		if cache.Fetched != nil {
+			fetched := time.Unix(int64(*cache.Fetched), 0)
+			if fetched.After(now.Add(5*time.Minute)) || now.Sub(fetched) > 2*time.Hour {
+				continue
+			}
+		}
+		primary := claudeOAuthWindow(cache.FiveHour, 300)
+		secondary := claudeOAuthWindow(cache.SevenDay, 10_080)
+		if primary == nil && secondary == nil {
+			continue
+		}
+		return &runtimeRateLimits{
+			LimitID:      "claude",
+			LimitName:    "Claude",
+			Availability: "available",
+			Primary:      primary,
+			Secondary:    secondary,
+		}
+	}
+	return nil
+}
+
+func claudeOAuthWindow(
+	window *claudeOAuthUsageWindow,
+	durationMinutes int64,
+) *runtimeRateLimitWindow {
+	if window == nil {
+		return nil
+	}
+	used := window.Utilization
+	if used == nil {
+		used = window.UsedPercentage
+	}
+	reset := claudeOAuthResetEpoch(window.ResetsAt)
+	if used == nil && reset == nil {
+		return nil
+	}
+	return &runtimeRateLimitWindow{
+		UsedPercent:       used,
+		WindowDurationMin: &durationMinutes,
+		ResetsAt:          reset,
+	}
+}
+
+func claudeOAuthResetEpoch(raw json.RawMessage) *int64 {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var numeric float64
+	if json.Unmarshal(raw, &numeric) == nil && numeric > 0 {
+		value := int64(numeric)
+		return &value
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(text))
+	if err != nil {
+		return nil
+	}
+	value := parsed.Unix()
+	return &value
 }
 
 func claudeAPIKeyConfigured(configured map[string]string) bool {

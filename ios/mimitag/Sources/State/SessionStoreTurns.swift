@@ -35,7 +35,26 @@ extension SessionStore {
             return
         }
         do {
-            let summary = try await clientFactory().refreshRateLimit(runtimeProvider: normalizedProvider)
+            let client = AgentAPIClient(endpoint: appStore.connectionEndpoint, token: appStore.token)
+            var summary: RateLimitSummary?
+
+            // Claude bridge 并不稳定地实现 account/rateLimits/read；优先读取 agentd
+            // 的脱敏运行时快照。首次请求可能只触发后台刷新，因此做短时间有界重试。
+            for attempt in 0..<4 {
+                let status = try await client.runtimeStatus()
+                summary = status.runtimes.first {
+                    Self.normalizedRuntimeProvider($0.id) == normalizedProvider
+                }?.rateLimits?.summary
+                if summary != nil || !status.refreshing || attempt == 3 {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(700))
+                try Task.checkCancellation()
+            }
+
+            if summary == nil {
+                summary = try await clientFactory().refreshRateLimit(runtimeProvider: normalizedProvider)
+            }
             guard !Task.isCancelled else {
                 return
             }

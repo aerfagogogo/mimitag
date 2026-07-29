@@ -103,7 +103,8 @@ enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
     }
 
     static func available(claudeChannelAvailable: Bool) -> [Self] {
-        claudeChannelAvailable ? [.codex, .claude, .team] : [.codex, .team]
+        // 团队协作已有独立入口；普通“新会话”只创建单 Agent 会话。
+        claudeChannelAvailable ? [.codex, .claude] : [.codex]
     }
 }
 

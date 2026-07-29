@@ -838,12 +838,6 @@ struct UnifiedWorkbenchShell: View {
             onNewSession: {
                 // 侧栏底部保留全局新建入口，和会话页右上角共用同一个创建流程。
                 presentedSheet = .newSession
-            },
-            onRefreshUsage: {
-                await sessionStore.refreshCodexUsage()
-                if sessionStore.hasClaudeRuntimeChannel {
-                    await sessionStore.refreshClaudeUsage()
-                }
             }
         )
     }
@@ -1284,29 +1278,25 @@ struct WorkbenchSidebarDestinationButton: View {
 /// 全局配置放左侧，主创建动作放右侧；两端布局在侧栏高度变化时保持稳定。
 struct WorkbenchSidebarFooter: View {
     @EnvironmentObject private var themeStore: ThemeStore
-    @EnvironmentObject private var sessionStore: SessionStore
 
     let tokens: ThemeTokens
     let bottomSafeAreaInset: CGFloat
     let onOpenSettings: () -> Void
     let onOpenTeam: () -> Void
     let onNewSession: () -> Void
-    let onRefreshUsage: () async -> Void
 
     init(
         tokens: ThemeTokens,
         bottomSafeAreaInset: CGFloat = 0,
         onOpenSettings: @escaping () -> Void,
         onOpenTeam: @escaping () -> Void,
-        onNewSession: @escaping () -> Void,
-        onRefreshUsage: @escaping () async -> Void
+        onNewSession: @escaping () -> Void
     ) {
         self.tokens = tokens
         self.bottomSafeAreaInset = bottomSafeAreaInset
         self.onOpenSettings = onOpenSettings
         self.onOpenTeam = onOpenTeam
         self.onNewSession = onNewSession
-        self.onRefreshUsage = onRefreshUsage
     }
 
     var body: some View {
@@ -1347,43 +1337,6 @@ struct WorkbenchSidebarFooter: View {
             .accessibilityLabel(L10n.text("ui.team"))
             .accessibilityIdentifier("sidebar.team")
 
-            Button {
-                Task { await onRefreshUsage() }
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.text("ui.model_quota"))
-                        .font(themeStore.uiFont(.caption, weight: .semibold))
-                        .lineLimit(1)
-                        .foregroundStyle(tokens.tertiaryText)
-
-                    Text(
-                        L10n.format(
-                            "ui.labeled_value",
-                            "Codex",
-                            compactUsageText(sessionStore.accountCodexUsageWindowsDisplay)
-                        )
-                    )
-                        .font(themeStore.uiFont(.caption2, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .foregroundStyle(tokens.primaryText)
-
-                    Text(
-                        L10n.format(
-                            "ui.labeled_value",
-                            "Claude",
-                            compactUsageText(sessionStore.accountClaudeUsageWindowsDisplay)
-                        )
-                    )
-                        .font(themeStore.uiFont(.caption2))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .foregroundStyle(tokens.secondaryText)
-                }
-            }
-            .buttonStyle(.plain)
-            .frame(minHeight: 56)
-
             Spacer(minLength: 0)
 
             Button(action: onNewSession) {
@@ -1413,14 +1366,6 @@ struct WorkbenchSidebarFooter: View {
         }
     }
 
-    private func compactUsageText(_ display: CodexUsageWindowsDisplay) -> String {
-        guard !display.windows.isEmpty else {
-            return display.creditText
-        }
-        return display.windows
-            .map { "\($0.label) \($0.remainingText)" }
-            .joined(separator: " · ")
-    }
 }
 
 /// 侧栏标题旁分别展示 Codex 与 Claude，禁止再用一个圆环承载两个提供方。
@@ -1998,7 +1943,14 @@ private struct NewSessionSheet: View {
     }
 
     private func runtimeTitle(for choice: WorkspaceSessionRuntimeChoice) -> String {
-        choice == .codex ? "Codex" : "Claude Code"
+        switch choice {
+        case .codex:
+            return "Codex"
+        case .claude:
+            return "Claude Code"
+        case .team:
+            return L10n.text("ui.team")
+        }
     }
 
     private func compactWorkspacePath(_ path: String) -> String {
