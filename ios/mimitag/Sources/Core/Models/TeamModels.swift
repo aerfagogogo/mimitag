@@ -279,7 +279,7 @@ struct TeamWorkspaceScope: Hashable {
 }
 
 struct TeamExecutionScope: Hashable {
-    static let prefix = "[Mimi 团队执行："
+    static let prefix = "[mimi-team-execution:"
 
     let permissionMode: String
     let skillPaths: [String]
@@ -291,7 +291,7 @@ struct TeamExecutionScope: Hashable {
         skills: [SkillCapability]
     ) -> String {
         let paths = skills.map(\.path).joined(separator: "|")
-        return "\(prefix)权限=\(permissionMode.rawValue)；Skills=\(paths)]\n\(content)"
+        return "\(prefix)permission=\(permissionMode.rawValue);skills=\(paths)]\n\(content)"
     }
 
     static func parse(from content: String) -> TeamExecutionScope? {
@@ -302,12 +302,12 @@ struct TeamExecutionScope: Hashable {
         }
         let headerStart = content.index(content.startIndex, offsetBy: prefix.count)
         let header = String(content[headerStart..<closingBracket])
-        let fields = header.split(separator: "；").map(String.init)
+        let fields = header.split(separator: ";").map(String.init)
         let permission = fields.first?
-            .replacingOccurrences(of: "权限=", with: "")
+            .replacingOccurrences(of: "permission=", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let skills = fields.dropFirst().first?
-            .replacingOccurrences(of: "Skills=", with: "")
+            .replacingOccurrences(of: "skills=", with: "")
             .split(separator: "|")
             .map(String.init) ?? []
         let bodyStart = content.index(after: closingBracket)

@@ -14,6 +14,22 @@
     "@%@" : {
       "shouldTranslate" : false
     },
+    "@%@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "@%1$@ · %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "@%1$@ · %2$@"
+          }
+        }
+      }
+    },
     "%@" : {
       "shouldTranslate" : false
     },
@@ -2342,40 +2358,6 @@
         }
       }
     },
-    "ui.auto_approve_this_session" : {
-      "comment" : "A button that enables automatic acceptance of all approval requests for only the current agent session.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Auto-approve This Session"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "本会话自动批准"
-          }
-        }
-      }
-    },
-    "ui.auto_approve_this_session_detail" : {
-      "comment" : "Explains that session auto-approval includes high-risk requests but does not alter global security settings.",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Accept this and later requests, including high-risk ones, without changing global settings."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自动通过当前及后续审批（含高风险），不修改全局安全设置。"
-          }
-        }
-      }
-    },
     "ui.approval_records" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
       "localizations" : {
@@ -2781,6 +2763,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "鉴权版本"
+          }
+        }
+      }
+    },
+    "ui.auto_approve_this_session" : {
+      "comment" : "A button that enables automatic acceptance of all approval requests for only the current agent session.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto-approve This Session"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本会话自动批准"
+          }
+        }
+      }
+    },
+    "ui.auto_approve_this_session_detail" : {
+      "comment" : "Explains that session auto-approval includes high-risk requests but does not alter global security settings.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accept this and later requests, including high-risk ones, without changing global settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动通过当前及后续审批（含高风险），不修改全局安全设置。"
           }
         }
       }
@@ -4496,6 +4512,7 @@
     },
     "ui.codex_remaining_usage" : {
       "comment" : "User-facing UI text. Keep this stable semantic key; never use catalog values for protocol fields or log parsing.",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -6075,6 +6092,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新建 Codex 会话"
+          }
+        }
+      }
+    },
+    "ui.create_team_collaboration" : {
+      "comment" : "Action for creating a new team collaboration session.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New team collaboration"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建团队协作"
           }
         }
       }
@@ -15775,6 +15809,7 @@
     },
     "ui.open_agent_team" : {
       "comment" : "Accessibility label for opening the optional agent team view.",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -24829,6 +24864,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "团队"
+          }
+        }
+      }
+    },
+    "ui.team_collaboration" : {
+      "comment" : "Short suffix used in a team collaboration session title.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Team collaboration"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "团队协作"
           }
         }
       }

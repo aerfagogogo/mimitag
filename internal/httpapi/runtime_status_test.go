@@ -190,6 +190,7 @@ func TestApplyCodexAccountDoesNotClaimUnverifiedCredentialsAreConnected(t *testi
 }
 
 func TestRuntimeStatusUsesClaudeOAuthUsageAsAuthenticatedEvidence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	upstreamURL, _, _ := fakeAppServerUpstream(t, runtimeStatusCodexResponder(t))
 	bridgePath := writeTestBridge(t, `#!/bin/sh
 IFS= read -r initialize
@@ -271,6 +272,7 @@ while IFS= read -r line; do :; done
 }
 
 func TestRuntimeStatusIgnoresParentClaudeAPIKeyNotPassedToBridge(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "parent-only-key-must-not-leak")
 	upstreamURL, _, _ := fakeAppServerUpstream(t, runtimeStatusCodexResponder(t))
 	bridgePath := writeTestBridge(t, `#!/bin/sh

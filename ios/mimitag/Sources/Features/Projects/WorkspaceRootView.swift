@@ -85,9 +85,7 @@ enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
         case .claude:
             return L10n.text("ui.create_a_new_claude_code_session")
         case .team:
-            return Locale.preferredLanguages.first?.hasPrefix("zh") == true
-                ? "新建团队协作"
-                : "New team collaboration"
+            return L10n.text("ui.create_team_collaboration")
         }
     }
 
