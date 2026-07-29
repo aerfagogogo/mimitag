@@ -26,6 +26,7 @@ type Config struct {
 	Codex         CodexConfig     `json:"codex"`
 	Claude        ClaudeConfig    `json:"claude"`
 	Team          TeamConfig      `json:"team"`
+	ClaudeCLI     ClaudeCLIConfig `json:"claude_cli"`
 	Session       SessionConfig   `json:"session"`
 	Debug         DebugConfig     `json:"debug"`
 	Projects      []ProjectConfig `json:"projects"`
@@ -59,6 +60,13 @@ type ClaudeConfig struct {
 	Args                 []string          `json:"args,omitempty"`
 	Env                  map[string]string `json:"env,omitempty"`
 	MaxConcurrentBridges int               `json:"max_concurrent_bridges"`
+}
+
+// ClaudeCLIConfig 控制 agentd 是否观测本机 Claude Code CLI 会话（~/.claude/projects/**/*.jsonl）。
+// 只读展示：不修改、不复制原文件，也不能通过它注入指令。默认开启。
+type ClaudeCLIConfig struct {
+	Enabled     bool   `json:"enabled"`
+	ProjectsDir string `json:"projects_dir,omitempty"`
 }
 
 // TeamConfig 配置一个仅在本机可达的 OpenTag 服务。移动端仍只连接 agentd，
@@ -226,6 +234,9 @@ func defaults() Config {
 		Team: TeamConfig{
 			BaseURL: "http://127.0.0.1:7777",
 			Channel: "all",
+		},
+		ClaudeCLI: ClaudeCLIConfig{
+			Enabled: true,
 		},
 		Session: SessionConfig{
 			OutputBufferBytes: 128 * 1024,

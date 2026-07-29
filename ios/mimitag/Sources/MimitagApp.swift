@@ -150,6 +150,7 @@ struct MimitagApp: App {
     @StateObject private var contextStore: SessionContextStore
     @StateObject private var sessionStore: SessionStore
     @StateObject private var teamStore: TeamStore
+    @StateObject private var claudeCLIStore: ClaudeCLIStore
     @StateObject private var themeStore: ThemeStore
     @StateObject private var notificationResponseAdapter: SessionNotificationResponseAdapter
 
@@ -165,6 +166,7 @@ struct MimitagApp: App {
         _logStore = StateObject(wrappedValue: logStore)
         _contextStore = StateObject(wrappedValue: contextStore)
         _teamStore = StateObject(wrappedValue: TeamStore(appStore: appStore))
+        _claudeCLIStore = StateObject(wrappedValue: ClaudeCLIStore(appStore: appStore))
         _themeStore = StateObject(wrappedValue: themeStore)
         _notificationResponseAdapter = StateObject(wrappedValue: notificationResponseAdapter)
         _sessionStore = StateObject(wrappedValue: SessionStore(
@@ -188,6 +190,7 @@ struct MimitagApp: App {
                 .environmentObject(logStore)
                 .environmentObject(contextStore)
                 .environmentObject(teamStore)
+                .environmentObject(claudeCLIStore)
                 .environmentObject(themeStore)
                 .environmentObject(notificationResponseAdapter)
                 .onOpenURL { url in

@@ -468,6 +468,21 @@ struct AgentAPIClient {
         try await request(path: "/api/team/sessions", method: "GET", body: Optional<Data>.none)
     }
 
+    // Claude Code CLI 会话观测接口——只读，agentd 从 ~/.claude/projects/**/*.jsonl 扫出的会话。
+    // 关闭 config.ClaudeCLI.Enabled 时 agentd 会返回 404，客户端应把这个错误静默为空列表。
+    func claudeCLISessions() async throws -> ClaudeCLISessionsResponse {
+        try await request(path: "/api/claude-cli/sessions", method: "GET", body: Optional<Data>.none)
+    }
+
+    func claudeCLIMessages(sessionID: String, offset: Int, limit: Int) async throws -> ClaudeCLIMessagesResponse {
+        let encoded = Self.percentEncodedPathComponent(sessionID)
+        var query: [String: String?] = [:]
+        if offset > 0 { query["offset"] = String(offset) }
+        if limit > 0 { query["limit"] = String(limit) }
+        let path = makePath("/api/claude-cli/sessions/\(encoded)/messages", query: query)
+        return try await request(path: path, method: "GET", body: Optional<Data>.none)
+    }
+
     func createTeamSession(project: AgentProject, title: String, agentIDs: [String]) async throws -> TeamSession {
         let body = try JSONEncoder().encode(TeamSessionCreateRequest(
             title: title,

@@ -404,6 +404,7 @@ struct UnifiedWorkbenchShell: View {
     @EnvironmentObject private var sessionStore: SessionStore
     @EnvironmentObject private var themeStore: ThemeStore
     @EnvironmentObject private var teamStore: TeamStore
+    @EnvironmentObject private var claudeCLIStore: ClaudeCLIStore
     @EnvironmentObject private var notificationResponseAdapter: SessionNotificationResponseAdapter
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -415,6 +416,9 @@ struct UnifiedWorkbenchShell: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var presentedSheet: AppSheetDestination?
     @State private var notificationVisibilitySceneID = UUID()
+    /// 打开一个 Claude Code CLI 只读会话时把它的 sessionID 放在这里，
+    /// 用 SwiftUI 的 sheet(item:) 绑定弹出查看器。为空则不显示。
+    @State private var claudeCLIViewerSession: ClaudeCLIViewerSessionRef?
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -453,6 +457,9 @@ struct UnifiedWorkbenchShell: View {
                 case .settings:
                     SettingsView(isInitialSetup: false)
                 }
+            }
+            .sheet(item: $claudeCLIViewerSession) { reference in
+                ClaudeCLISessionView(sessionID: reference.id)
             }
             .onAppear {
                 synchronizeNavigation(for: layout)
@@ -755,7 +762,10 @@ struct UnifiedWorkbenchShell: View {
         .task {
             async let regularSessions: Void = sessionStore.refreshSessionLibraryIndex()
             async let teamSessions: Void = teamStore.loadSessions()
-            _ = await (regularSessions, teamSessions)
+            // Claude CLI 观测走独立端点；agentd 关闭功能会返回 404，store 静默降级为空列表，
+            // 因此这里无脑并发拉一次即可，不需要额外的 feature-flag 判断。
+            async let claudeCLISessions: Void = claudeCLIStore.load()
+            _ = await (regularSessions, teamSessions, claudeCLISessions)
         }
     }
 
@@ -773,8 +783,11 @@ struct UnifiedWorkbenchShell: View {
     }
 
     private var sidebarRecentHistorySessions: [AgentSession] {
+        // 侧栏 Recent 段落合并本机 Claude Code CLI 只读会话——它们没有活跃状态，
+        // 与本地历史并列展示是最自然的位置；点开走独立的 read-only 查看器。
         Array(
-            (sessionStore.recentHistorySessions.filter { $0.runtimeProvider != "team" })
+            (sessionStore.recentHistorySessions.filter { $0.runtimeProvider != "team" }
+                + claudeCLIStore.sessionIndexEntries)
                 .sorted {
                     SessionIndexStore.orderingDate(for: $0) > SessionIndexStore.orderingDate(for: $1)
                 }
@@ -784,7 +797,9 @@ struct UnifiedWorkbenchShell: View {
 
     @ViewBuilder
     private func sidebarSessionLink(_ session: AgentSession, layout: WorkbenchLayout) -> some View {
-        if session.runtimeProvider == "team" {
+        // team 与 claude-cli 都不走 AppDestination.session（前者进 Team 页，后者进只读查看器 sheet），
+        // 所以用 Button 而不是 NavigationLink，避免污染主 NavigationStack 的路径。
+        if session.runtimeProvider == "team" || session.runtimeProvider == "claude-cli" {
             Button {
                 openIndexedSession(session, source: .sessions, layout: layout)
             } label: {
@@ -806,16 +821,19 @@ struct UnifiedWorkbenchShell: View {
     }
 
     private func sidebarSessionRow(_ session: AgentSession) -> some View {
-        SessionIndexRow(
+        let isReadOnly = SessionListView.isReadOnlyRuntime(session)
+        return SessionIndexRow(
             session: session,
-            foregroundActivity: session.runtimeProvider == "team" ? nil : sessionStore.foregroundActivity(for: session.id),
+            foregroundActivity: isReadOnly ? nil : sessionStore.foregroundActivity(for: session.id),
             isSelected: session.runtimeProvider == "team"
                 ? session.id == teamStore.selectedSession?.id
-                : session.id == sessionStore.selectedSessionID,
-            isPinned: session.runtimeProvider == "team" ? false : sessionStore.isSessionPinned(session.id),
-            isArchived: session.runtimeProvider == "team" ? false : sessionStore.isSessionArchived(session.id),
-            reminder: session.runtimeProvider == "team" ? nil : sessionStore.sessionReminder(for: session.id),
-            isObserving: session.runtimeProvider == "team" ? false : sessionStore.isSessionObserving(session),
+                : session.runtimeProvider == "claude-cli"
+                    ? claudeCLIViewerSession.map { "claude-cli:" + $0.id } == session.id
+                    : session.id == sessionStore.selectedSessionID,
+            isPinned: isReadOnly ? false : sessionStore.isSessionPinned(session.id),
+            isArchived: isReadOnly ? false : sessionStore.isSessionArchived(session.id),
+            reminder: isReadOnly ? nil : sessionStore.sessionReminder(for: session.id),
+            isObserving: isReadOnly ? false : sessionStore.isSessionObserving(session),
             style: .sidebar
         )
     }
@@ -936,6 +954,14 @@ struct UnifiedWorkbenchShell: View {
         if session.runtimeProvider == "team" {
             guard teamStore.openSession(id: session.id) else { return }
             open(.team, source: source, layout: layout)
+            return
+        }
+        if session.runtimeProvider == "claude-cli" {
+            // Claude CLI 会话是只读观测，不进入 NavigationStack；用 sheet 弹只读查看器，
+            // 关闭时不影响当前工作台状态。
+            claudeCLIViewerSession = ClaudeCLIViewerSessionRef(
+                id: ClaudeCLIStore.stripAgentSessionPrefix(session.id)
+            )
             return
         }
         openSession(session, source: source, layout: layout)

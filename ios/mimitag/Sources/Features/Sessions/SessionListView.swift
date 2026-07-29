@@ -9,6 +9,7 @@ struct SessionRuntimePresentation: Equatable {
     enum Kind: Equatable {
         case codex
         case claude
+        case claudeCLI
         case team
     }
 
@@ -24,6 +25,8 @@ struct SessionRuntimePresentation: Equatable {
         switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "claude":
             kind = .claude
+        case "claude-cli":
+            kind = .claudeCLI
         case "team":
             kind = .team
         default:
@@ -37,6 +40,9 @@ struct SessionRuntimePresentation: Equatable {
             return L10n.text("ui.runtime_default")
         case .claude:
             return L10n.text("ui.runtime_optional")
+        case .claudeCLI:
+            // Claude Code CLI 会话是只读观测——文案区分于 bridge 版 Claude，避免用户误以为能续跑。
+            return "Claude CLI"
         case .team:
             return L10n.text("ui.team")
         }
@@ -46,7 +52,7 @@ struct SessionRuntimePresentation: Equatable {
         switch kind {
         case .codex:
             return "ChatGPT"
-        case .claude:
+        case .claude, .claudeCLI:
             return "Claude"
         case .team:
             return ""
@@ -154,6 +160,7 @@ struct SessionListPartition: Equatable {
 struct SessionListView: View {
     @EnvironmentObject private var sessionStore: SessionStore
     @EnvironmentObject private var teamStore: TeamStore
+    @EnvironmentObject private var claudeCLIStore: ClaudeCLIStore
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedWorkspaceID = "all"
@@ -306,7 +313,8 @@ struct SessionListView: View {
 
     private var visibleSessions: [AgentSession] {
         (sessionStore.sessionLibrarySessions
-            + teamStore.sessionIndexEntries.filter { $0.runtimeProvider != "team" })
+            + teamStore.sessionIndexEntries.filter { $0.runtimeProvider != "team" }
+            + claudeCLIStore.sessionIndexEntries)
             .filter { session in
             (selectedWorkspaceID == "all" || session.projectID == selectedWorkspaceID) &&
                 selectedStatus.includes(session)
@@ -329,18 +337,21 @@ struct SessionListView: View {
 
     @ViewBuilder
     private func sessionRow(_ session: AgentSession) -> some View {
+        // team 与 claude-cli 都是只读会话：没有前台活动、没有归档/固定、没有本地提醒。
+        // 用一个统一 flag 避免重复散布 runtimeProvider 字面量。
+        let isReadOnly = SessionListView.isReadOnlyRuntime(session)
         let row = SessionIndexRow(
             session: session,
-            foregroundActivity: session.runtimeProvider == "team" ? nil : sessionStore.foregroundActivity(for: session.id),
+            foregroundActivity: isReadOnly ? nil : sessionStore.foregroundActivity(for: session.id),
             isSelected: session.runtimeProvider == "team"
                 ? session.id == teamStore.selectedSession?.id
                 : session.id == sessionStore.selectedSessionID,
-            isPinned: session.runtimeProvider == "team" ? false : sessionStore.isSessionPinned(session.id),
-            isArchived: session.runtimeProvider == "team" ? false : sessionStore.isSessionArchived(session.id),
-            reminder: session.runtimeProvider == "team" ? nil : sessionStore.sessionReminder(for: session.id),
-            isObserving: session.runtimeProvider == "team" ? false : sessionStore.isSessionObserving(session),
+            isPinned: isReadOnly ? false : sessionStore.isSessionPinned(session.id),
+            isArchived: isReadOnly ? false : sessionStore.isSessionArchived(session.id),
+            reminder: isReadOnly ? nil : sessionStore.sessionReminder(for: session.id),
+            isObserving: isReadOnly ? false : sessionStore.isSessionObserving(session),
             style: .library,
-            searchSnippet: session.runtimeProvider == "team" ? nil : sessionStore.sessionSearchSnippet(for: session.id)
+            searchSnippet: isReadOnly ? nil : sessionStore.sessionSearchSnippet(for: session.id)
         )
         .contentShape(Rectangle())
         .onTapGesture { select(session) }
@@ -349,10 +360,21 @@ struct SessionListView: View {
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
 
-        if session.runtimeProvider == "team" {
+        if isReadOnly {
             row
         } else {
             row.sessionRowActions(session)
+        }
+    }
+
+    /// 判断一个会话是否属于"只读"运行时（team、claude-cli 之类），
+    /// 用来跳过前台活动/提醒/归档/固定等仅对活跃会话有意义的 UI 计算。
+    static func isReadOnlyRuntime(_ session: AgentSession) -> Bool {
+        switch session.runtimeProvider {
+        case "team", "claude-cli":
+            return true
+        default:
+            return false
         }
     }
 

@@ -74,6 +74,8 @@ type Router struct {
 	// TestFlight 发布会持续数分钟，使用内存任务保存当前进度，避免让移动端 HTTP 请求长时间挂起。
 	gitTestFlightMu   sync.Mutex
 	gitTestFlightJobs map[string]*gitTestFlightReleaseJob
+	// claudeCLIHolder 惰性构造只读 Claude CLI 会话观测 store；关闭 config.ClaudeCLI.Enabled 时永远不建。
+	claudeCLIHolder claudeCLIStoreHolder
 }
 
 func NewRouter(cfg config.Config, registry *projects.Registry, manager *session.Manager, checker *doctor.Checker, version string) http.Handler {
@@ -158,6 +160,8 @@ func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manage
 	mux.Handle("/api/team/messages", r.auth.Middleware(http.HandlerFunc(r.teamMessagesHandler)))
 	mux.Handle("/api/team/attachments", r.auth.Middleware(http.HandlerFunc(r.teamAttachmentsHandler)))
 	mux.Handle("/api/team/attachments/", r.auth.Middleware(http.HandlerFunc(r.teamAttachmentsHandler)))
+	mux.Handle("/api/claude-cli/sessions", r.auth.Middleware(http.HandlerFunc(r.claudeCLISessionsHandler)))
+	mux.Handle("/api/claude-cli/sessions/", r.auth.Middleware(http.HandlerFunc(r.claudeCLIMessagesHandler)))
 	mux.Handle("/api/runtime/status", r.auth.Middleware(http.HandlerFunc(r.runtimeStatusHandler)))
 	mux.Handle("/api/app-server/config", r.auth.Middleware(http.HandlerFunc(r.appServerConfigHandler)))
 	mux.Handle("/api/app-server/history-media/", r.auth.Middleware(http.HandlerFunc(r.appServerHistoryMediaHandler)))
