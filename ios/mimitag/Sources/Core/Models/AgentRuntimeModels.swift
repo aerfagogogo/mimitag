@@ -218,6 +218,83 @@ struct RateLimitSummary: Codable, Hashable {
     }
 }
 
+// agentd 的脱敏运行时状态同时服务 Mac 菜单栏和已配对移动端。
+// iOS 只消费额度窗口，不接触账号、OAuth Token 或 Keychain 内容。
+struct RuntimeStatusResponse: Decodable {
+    let refreshing: Bool
+    let runtimes: [RuntimeAccountStatus]
+}
+
+struct RuntimeAccountStatus: Decodable {
+    let id: String
+    let rateLimits: RuntimeRateLimits?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case rateLimits = "rate_limits"
+    }
+}
+
+struct RuntimeRateLimits: Decodable {
+    let limitID: String?
+    let limitName: String?
+    let planType: String?
+    let reachedType: String?
+    let availability: String?
+    let unavailableReason: String?
+    let primary: RuntimeRateLimitWindow?
+    let secondary: RuntimeRateLimitWindow?
+    let hasCredits: Bool?
+    let creditsUnlimited: Bool?
+    let creditBalance: String?
+
+    enum CodingKeys: String, CodingKey {
+        case limitID = "limit_id"
+        case limitName = "limit_name"
+        case planType = "plan_type"
+        case reachedType = "reached_type"
+        case availability
+        case unavailableReason = "unavailable_reason"
+        case primary
+        case secondary
+        case hasCredits = "has_credits"
+        case creditsUnlimited = "credits_unlimited"
+        case creditBalance = "credit_balance"
+    }
+
+    var summary: RateLimitSummary {
+        RateLimitSummary(
+            limitID: limitID,
+            limitName: limitName,
+            planType: planType,
+            reachedType: reachedType,
+            primaryUsedPercent: primary?.usedPercent,
+            secondaryUsedPercent: secondary?.usedPercent,
+            primaryResetsAt: primary?.resetsAt,
+            secondaryResetsAt: secondary?.resetsAt,
+            primaryWindowDurationMins: primary?.windowDurationMins,
+            secondaryWindowDurationMins: secondary?.windowDurationMins,
+            hasCredits: hasCredits,
+            creditsUnlimited: creditsUnlimited,
+            creditBalance: creditBalance,
+            availability: availability,
+            unavailableReason: unavailableReason
+        )
+    }
+}
+
+struct RuntimeRateLimitWindow: Decodable {
+    let usedPercent: Double?
+    let windowDurationMins: Int?
+    let resetsAt: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case usedPercent = "used_percent"
+        case windowDurationMins = "window_duration_mins"
+        case resetsAt = "resets_at"
+    }
+}
+
 struct CodexUsageDisplaySummary: Equatable {
     static let nearLimitThreshold = 0.85
 

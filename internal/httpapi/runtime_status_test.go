@@ -190,6 +190,7 @@ func TestApplyCodexAccountDoesNotClaimUnverifiedCredentialsAreConnected(t *testi
 }
 
 func TestRuntimeStatusUsesClaudeOAuthUsageAsAuthenticatedEvidence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	upstreamURL, _, _ := fakeAppServerUpstream(t, runtimeStatusCodexResponder(t))
 	bridgePath := writeTestBridge(t, `#!/bin/sh
 IFS= read -r initialize
@@ -271,6 +272,7 @@ while IFS= read -r line; do :; done
 }
 
 func TestRuntimeStatusIgnoresParentClaudeAPIKeyNotPassedToBridge(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "parent-only-key-must-not-leak")
 	upstreamURL, _, _ := fakeAppServerUpstream(t, runtimeStatusCodexResponder(t))
 	bridgePath := writeTestBridge(t, `#!/bin/sh
@@ -297,7 +299,7 @@ while IFS= read -r line; do :; done
 	}
 }
 
-func TestRuntimeStatusRejectsNonLoopbackWithoutStartingProviderProbe(t *testing.T) {
+func TestRuntimeStatusAllowsAuthenticatedPairedClient(t *testing.T) {
 	upstreamURL, _, connections := fakeAppServerUpstream(t, runtimeStatusCodexResponder(t))
 	handler, _ := appServerGatewayRouterFixtureWithConfig(t, upstreamURL, nil)
 
@@ -305,11 +307,11 @@ func TestRuntimeStatusRejectsNonLoopbackWithoutStartingProviderProbe(t *testing.
 	req := authedRequest(t, http.MethodGet, "/api/runtime/status", nil)
 	req.RemoteAddr = "100.64.0.8:43210"
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("远端 runtime status 必须拒绝，got=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("已配对客户端应能读取脱敏 runtime status，got=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if connections.Load() != 0 {
-		t.Fatalf("远端请求不能启动 provider probe：connections=%d", connections.Load())
+	if connections.Load() > 1 {
+		t.Fatalf("一次读取最多启动一个 provider probe：connections=%d", connections.Load())
 	}
 }
 

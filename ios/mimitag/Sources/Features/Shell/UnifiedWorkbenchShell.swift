@@ -677,6 +677,14 @@ struct UnifiedWorkbenchShell: View {
                     }
                 }
 
+                if !sidebarTeamSessions.isEmpty {
+                    Section(L10n.text("ui.team")) {
+                        ForEach(sidebarTeamSessions) { session in
+                            sidebarSessionLink(session, layout: layout)
+                        }
+                    }
+                }
+
                 Section(sidebarActiveSessions.isEmpty ? L10n.text("ui.recently") : L10n.text("ui.recent_history")) {
                     if sidebarRecentHistorySessions.isEmpty {
                         Text(sidebarActiveSessions.isEmpty ? L10n.text("ui.no_recent_conversations_yet") : L10n.text("ui.no_history_sessions_yet"))
@@ -698,7 +706,7 @@ struct UnifiedWorkbenchShell: View {
             .frame(maxHeight: .infinity)
 
             // 设置属于整个工作台而不是某个列表项，固定在侧栏底部可让顶部只保留品牌和当前内容。
-            sidebarFooter(tokens: tokens, bottomSafeAreaInset: bottomSafeAreaInset)
+            sidebarFooter(tokens: tokens, layout: layout, bottomSafeAreaInset: bottomSafeAreaInset)
         }
         // NavigationSplitView 在 iPad 竖屏以 overlay 展开侧栏时不会保证内容采用整列理想高度，
         // 根容器必须主动填满列高，Footer 才能稳定锚定到底部安全区。
@@ -753,11 +761,20 @@ struct UnifiedWorkbenchShell: View {
 
     private var sidebarActiveSessions: [AgentSession] {
         sessionStore.activeSessions
+            .filter { $0.runtimeProvider != "team" }
+    }
+
+    private var sidebarTeamSessions: [AgentSession] {
+        teamStore.sessionIndexEntries
+            .filter { $0.runtimeProvider == "team" }
+            .sorted {
+                SessionIndexStore.orderingDate(for: $0) > SessionIndexStore.orderingDate(for: $1)
+            }
     }
 
     private var sidebarRecentHistorySessions: [AgentSession] {
         Array(
-            (sessionStore.recentHistorySessions + teamStore.sessionIndexEntries)
+            (sessionStore.recentHistorySessions.filter { $0.runtimeProvider != "team" })
                 .sorted {
                     SessionIndexStore.orderingDate(for: $0) > SessionIndexStore.orderingDate(for: $1)
                 }
@@ -803,7 +820,11 @@ struct UnifiedWorkbenchShell: View {
         )
     }
 
-    private func sidebarFooter(tokens: ThemeTokens, bottomSafeAreaInset: CGFloat) -> some View {
+    private func sidebarFooter(
+        tokens: ThemeTokens,
+        layout: WorkbenchLayout,
+        bottomSafeAreaInset: CGFloat
+    ) -> some View {
         WorkbenchSidebarFooter(
             tokens: tokens,
             bottomSafeAreaInset: bottomSafeAreaInset,
@@ -811,15 +832,12 @@ struct UnifiedWorkbenchShell: View {
                 // 设置是全局配置，不改变当前会话或工作区选择。
                 presentedSheet = .settings
             },
+            onOpenTeam: {
+                open(.team, source: .workspaces, layout: layout)
+            },
             onNewSession: {
                 // 侧栏底部保留全局新建入口，和会话页右上角共用同一个创建流程。
                 presentedSheet = .newSession
-            },
-            onRefreshUsage: {
-                await sessionStore.refreshCodexUsage()
-                if sessionStore.hasClaudeRuntimeChannel {
-                    await sessionStore.refreshClaudeUsage()
-                }
             }
         )
     }
@@ -1260,26 +1278,25 @@ struct WorkbenchSidebarDestinationButton: View {
 /// 全局配置放左侧，主创建动作放右侧；两端布局在侧栏高度变化时保持稳定。
 struct WorkbenchSidebarFooter: View {
     @EnvironmentObject private var themeStore: ThemeStore
-    @EnvironmentObject private var sessionStore: SessionStore
 
     let tokens: ThemeTokens
     let bottomSafeAreaInset: CGFloat
     let onOpenSettings: () -> Void
+    let onOpenTeam: () -> Void
     let onNewSession: () -> Void
-    let onRefreshUsage: () async -> Void
 
     init(
         tokens: ThemeTokens,
         bottomSafeAreaInset: CGFloat = 0,
         onOpenSettings: @escaping () -> Void,
-        onNewSession: @escaping () -> Void,
-        onRefreshUsage: @escaping () async -> Void
+        onOpenTeam: @escaping () -> Void,
+        onNewSession: @escaping () -> Void
     ) {
         self.tokens = tokens
         self.bottomSafeAreaInset = bottomSafeAreaInset
         self.onOpenSettings = onOpenSettings
+        self.onOpenTeam = onOpenTeam
         self.onNewSession = onNewSession
-        self.onRefreshUsage = onRefreshUsage
     }
 
     var body: some View {
@@ -1304,42 +1321,21 @@ struct WorkbenchSidebarFooter: View {
             .accessibilityLabel(L10n.text("ui.open_settings"))
             .accessibilityIdentifier("sidebar.settings")
 
-            Button {
-                Task { await onRefreshUsage() }
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.text("ui.model_quota"))
-                        .font(themeStore.uiFont(.caption, weight: .semibold))
-                        .lineLimit(1)
-                        .foregroundStyle(tokens.tertiaryText)
-
-                    Text(
-                        L10n.format(
-                            "ui.labeled_value",
-                            "Codex",
-                            compactUsageText(sessionStore.accountCodexUsageWindowsDisplay)
-                        )
-                    )
-                        .font(themeStore.uiFont(.caption2, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .foregroundStyle(tokens.primaryText)
-
-                    Text(
-                        L10n.format(
-                            "ui.labeled_value",
-                            "Claude",
-                            compactUsageText(sessionStore.accountClaudeUsageWindowsDisplay)
-                        )
-                    )
-                        .font(themeStore.uiFont(.caption2))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .foregroundStyle(tokens.secondaryText)
-                }
+            Button(action: onOpenTeam) {
+                Label(L10n.text("ui.team"), systemImage: "person.3.fill")
+                    .font(themeStore.uiFont(.subheadline, weight: .medium))
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
             }
             .buttonStyle(.plain)
-            .frame(minHeight: 56)
+            .foregroundStyle(tokens.secondaryText)
+            .background(tokens.surface.opacity(0.72), in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(tokens.border.opacity(0.6), lineWidth: 1)
+            }
+            .accessibilityLabel(L10n.text("ui.team"))
+            .accessibilityIdentifier("sidebar.team")
 
             Spacer(minLength: 0)
 
@@ -1370,14 +1366,6 @@ struct WorkbenchSidebarFooter: View {
         }
     }
 
-    private func compactUsageText(_ display: CodexUsageWindowsDisplay) -> String {
-        guard !display.windows.isEmpty else {
-            return display.creditText
-        }
-        return display.windows
-            .map { "\($0.label) \($0.remainingText)" }
-            .joined(separator: " · ")
-    }
 }
 
 /// 侧栏标题旁分别展示 Codex 与 Claude，禁止再用一个圆环承载两个提供方。
@@ -1955,7 +1943,14 @@ private struct NewSessionSheet: View {
     }
 
     private func runtimeTitle(for choice: WorkspaceSessionRuntimeChoice) -> String {
-        choice == .codex ? "Codex" : "Claude Code"
+        switch choice {
+        case .codex:
+            return "Codex"
+        case .claude:
+            return "Claude Code"
+        case .team:
+            return L10n.text("ui.team")
+        }
     }
 
     private func compactWorkspacePath(_ path: String) -> String {

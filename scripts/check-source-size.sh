@@ -39,6 +39,9 @@ exception_reason() {
     ios/mimitag/Sources/State/SessionStoreHistory.swift)
       printf '%s' '会话创建、历史加载与列表恢复逻辑，后续按历史分页、列表和恢复职责拆分'
       ;;
+    ios/mimitag/Sources/Features/Shell/UnifiedWorkbenchShell.swift)
+      printf '%s' '统一工作台、侧栏与额度入口仍在同一导航壳中，后续按侧栏和顶栏职责拆分'
+      ;;
     *) return 1 ;;
   esac
 }

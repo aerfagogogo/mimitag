@@ -58,9 +58,7 @@ final class TeamStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            let suffix = Locale.preferredLanguages.first?.hasPrefix("zh") == true
-                ? "团队协作"
-                : "Team collaboration"
+            let suffix = L10n.text("ui.team_collaboration")
             let title = "\(project.name) · \(suffix)"
             let session = try await makeClient().createTeamSession(
                 project: project,

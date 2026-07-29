@@ -13,6 +13,14 @@ struct TeamConversationView: View {
     @State private var photoLibraryPickerRequest: PhotoLibraryPickerRequest?
     @State private var attachmentErrorMessage: String?
     @State private var sendsAsTask = false
+    @State private var selectedSkillPaths: Set<String> = []
+    @State private var manualSkills: [SkillCapability] = []
+    @State private var showsSkillPicker = false
+    @State private var showsManualSkillInputSheet = false
+    @State private var permissionMode = ComposerPermissionMode.defaultMode
+    @StateObject private var voiceInput = VoiceInputController()
+    @State private var isVoiceTranscribing = false
+    @State private var sendTask: Task<Void, Never>?
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -45,7 +53,6 @@ struct TeamConversationView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 10) {
-                    workspaceMenu(tokens: tokens)
                     Button {
                         Task { await teamStore.load() }
                     } label: {
@@ -57,6 +64,8 @@ struct TeamConversationView: View {
                     }
                     .accessibilityLabel(L10n.text("ui.refresh"))
                     .disabled(teamStore.isLoading)
+
+                    teamDetailMenu(tokens: tokens)
                 }
             }
         }
@@ -73,6 +82,29 @@ struct TeamConversationView: View {
                 loadPhotoAttachments(results)
             }
             .ignoresSafeArea()
+        }
+        .task {
+            await sessionStore.refreshCapabilities()
+        }
+        .onDisappear {
+            voiceInput.cancel()
+        }
+        .sheet(isPresented: $showsManualSkillInputSheet) {
+            ManualSkillInputSheet { input in
+                guard case .skill(let name, let path) = input else { return }
+                if !manualSkills.contains(where: { $0.path == path }) {
+                    manualSkills.append(
+                        SkillCapability(
+                            name: name,
+                            description: nil,
+                            scope: "manual",
+                            path: path,
+                            enabled: true
+                        )
+                    )
+                }
+                selectedSkillPaths.insert(path)
+            }
         }
     }
 
@@ -112,14 +144,53 @@ struct TeamConversationView: View {
                         }
                     }
                 }
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(tokens.surface)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(tokens.border.opacity(0.6)).frame(height: 1)
+            }
+    }
+
+    private func teamDetailMenu(tokens: ThemeTokens) -> some View {
+        Menu {
+            Section(L10n.text("ui.team")) {
+                ForEach(teamStore.sessions) { session in
+                    Button {
+                        teamStore.openSession(session)
+                    } label: {
+                        if session.id == teamStore.selectedSession?.id {
+                            Label(session.title, systemImage: "checkmark")
+                        } else {
+                            Text(session.title)
+                        }
+                    }
+                }
+            }
+
+            Section(L10n.text("ui.workspace")) {
+                Button(L10n.text("ui.no_workspace_context")) {
+                    teamStore.selectWorkspace(nil)
+                }
+                ForEach(sessionStore.projects) { project in
+                    Button {
+                        teamStore.selectWorkspace(project)
+                    } label: {
+                        if project.id == teamStore.selectedWorkspace?.id {
+                            Label(project.name, systemImage: "checkmark")
+                        } else {
+                            Text(project.name)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "sidebar.right")
+                .foregroundStyle(tokens.secondaryText)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(tokens.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(tokens.border.opacity(0.6)).frame(height: 1)
-        }
+        .accessibilityLabel(L10n.text("ui.show_details"))
     }
 
     private func workspaceMenu(tokens: ThemeTokens) -> some View {
@@ -285,6 +356,21 @@ struct TeamConversationView: View {
                     attachmentStrip(tokens: tokens)
                 }
 
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        teamSkillPicker
+                        teamPermissionMenu
+                        ForEach(selectedSkills) { skill in
+                            Label(skill.presentationName, systemImage: "wand.and.stars")
+                                .font(themeStore.uiFont(.caption, weight: .semibold))
+                                .foregroundStyle(tokens.secondaryText)
+                                .padding(.horizontal, 10)
+                                .frame(height: 34)
+                                .background(tokens.elevatedSurface, in: Capsule())
+                        }
+                    }
+                }
+
                 if !mentionMatches.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -322,100 +408,55 @@ struct TeamConversationView: View {
                 }
 
                 HStack(spacing: 10) {
-                    Menu {
-                        Button {
-                            presentPhotoLibraryPicker()
-                        } label: {
-                            Label(L10n.text("ui.add_image"), systemImage: "photo")
-                        }
-
-                        if !teamStore.agents.isEmpty {
-                            Divider()
-                            ForEach(teamStore.agents) { agent in
-                                Button {
-                                    replaceMentionQuery(with: agent.name)
-                                } label: {
-                                    Label("@\(agent.name)", systemImage: "at")
-                                }
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(themeStore.uiFont(size: 16, weight: .semibold))
-                            .frame(width: 38, height: 38)
-                            .background(tokens.elevatedSurface, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(attachments.count >= Self.maximumImageAttachmentCount || teamStore.isSending)
-                    .accessibilityLabel(L10n.text("ui.add_image"))
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(teamStore.agents) { agent in
-                                let selected = teamStore.selectedAgentIDs.contains(agent.id)
-                                Button {
-                                    teamStore.toggleAgent(agent)
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Circle()
-                                            .fill(agent.canReceiveWork ? tokens.success : tokens.warning)
-                                            .frame(width: 6, height: 6)
-                                        VStack(alignment: .leading, spacing: 0) {
-                                            Text("@\(agent.name)")
-                                                .font(themeStore.uiFont(.caption, weight: .semibold))
-                                            Text("\(agent.runtime) · \(agent.modelLabel)")
-                                                .font(themeStore.uiFont(.caption2))
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                    .foregroundStyle(selected ? tokens.primaryActionForeground : tokens.secondaryText)
-                                    .padding(.horizontal, 10)
-                                    .frame(height: 40)
-                                    .background(
-                                        selected ? tokens.primaryAction : tokens.elevatedSurface,
-                                        in: Capsule()
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("@\(agent.name), \(agent.runtime), \(agent.modelLabel)")
-                            }
-                        }
-                    }
+                    teamAddContentMenu
+                    teamModelMenu
 
                     Spacer(minLength: 4)
 
-                    Button {
-                        sendsAsTask.toggle()
-                    } label: {
-                        Image(systemName: sendsAsTask ? "checkmark.square.fill" : "square")
-                            .font(themeStore.uiFont(size: 15, weight: .semibold))
-                            .frame(width: 38, height: 38)
-                            .background(tokens.elevatedSurface, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(sendsAsTask ? tokens.primaryAction : tokens.secondaryText)
-                    .accessibilityLabel(L10n.text("ui.task"))
+                    teamOptionsMenu
 
-                    Button(action: sendDraft) {
+                    VoiceMicButton(
+                        isPreparing: voiceInput.isPreparing,
+                        isRecording: voiceInput.isRecording,
+                        isTranscribing: isVoiceTranscribing,
+                        usesRealtimeTranscription: false,
+                        onTap: toggleTeamVoiceInput
+                    )
+
+                    Button {
+                        if teamStore.isSending {
+                            sendTask?.cancel()
+                        } else {
+                            sendDraft()
+                        }
+                    } label: {
                         Group {
                             if teamStore.isSending {
-                                ProgressView()
-                                    .tint(tokens.primaryActionForeground)
+                                Image(systemName: "stop.fill")
+                                    .font(themeStore.uiFont(size: 14, weight: .bold))
                             } else {
-                                Image(systemName: "arrow.up")
+                                Image(systemName: "paperplane.fill")
                                     .font(themeStore.uiFont(size: 15, weight: .semibold))
                             }
                         }
-                        .frame(width: 42, height: 42)
+                        .frame(width: 44, height: 44)
                         .background(
-                            canSend ? tokens.primaryAction : tokens.elevatedSurface,
+                            canSend || teamStore.isSending ? tokens.primaryAction : tokens.elevatedSurface,
                             in: Circle()
                         )
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(canSend ? tokens.primaryActionForeground : tokens.tertiaryText)
-                    .disabled(!canSend)
-                    .accessibilityLabel(L10n.text("ui.send_collaboration_message"))
+                    .foregroundStyle(
+                        canSend || teamStore.isSending
+                            ? tokens.primaryActionForeground
+                            : tokens.tertiaryText
+                    )
+                    .disabled(!canSend && !teamStore.isSending)
+                    .accessibilityLabel(
+                        teamStore.isSending
+                            ? L10n.text("ui.stop")
+                            : L10n.text("ui.send_collaboration_message")
+                    )
                 }
             }
             .padding(.horizontal, 14)
@@ -441,6 +482,223 @@ struct TeamConversationView: View {
         .frame(maxWidth: 920)
         .frame(maxWidth: .infinity)
         .background(tokens.background)
+    }
+
+    private var teamSkillPicker: some View {
+        Button {
+            showsSkillPicker.toggle()
+        } label: {
+            ComposerToolbarControlLabel(
+                title: "Skill",
+                systemImage: "wand.and.stars",
+                trailingSystemImage: nil,
+                isSelected: !selectedSkillPaths.isEmpty,
+                tint: nil,
+                titleMaxWidth: nil,
+                accessibilityLabel: L10n.text("ui.select_skill")
+            )
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showsSkillPicker, arrowEdge: .bottom) {
+            SkillPickerPanel(
+                skills: enabledSkills,
+                selectedPaths: selectedSkillPaths,
+                errorMessage: sessionStore.capabilityErrorMessage,
+                isRefreshing: sessionStore.isRefreshingCapabilities,
+                onToggle: toggleTeamSkill,
+                onRefresh: {
+                    Task { await sessionStore.refreshCapabilities(forceReload: true) }
+                },
+                onManualAdd: {
+                    showsSkillPicker = false
+                    showsManualSkillInputSheet = true
+                }
+            )
+            .environmentObject(themeStore)
+            .presentationCompactAdaptation(.sheet)
+        }
+    }
+
+    private var teamPermissionMenu: some View {
+        Menu {
+            ForEach(ComposerPermissionMode.allCases) { mode in
+                Button {
+                    permissionMode = mode
+                } label: {
+                    Label(mode.title, systemImage: permissionMode == mode ? "checkmark" : mode.systemImage)
+                }
+            }
+        } label: {
+            ComposerToolbarControlLabel(
+                title: permissionMode.title,
+                systemImage: permissionMode.systemImage,
+                trailingSystemImage: nil,
+                isSelected: false,
+                tint: permissionMode == .fullAccess ? .red : nil,
+                titleMaxWidth: nil,
+                accessibilityLabel: L10n.text("ui.permission_mode")
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var teamAddContentMenu: some View {
+        Menu {
+            Button {
+                presentPhotoLibraryPicker()
+            } label: {
+                Label(L10n.text("ui.add_image"), systemImage: "photo")
+            }
+            Divider()
+            ForEach(teamStore.agents) { agent in
+                Button {
+                    replaceMentionQuery(with: agent.name)
+                } label: {
+                    Label("@\(agent.name)", systemImage: "at")
+                }
+            }
+        } label: {
+            ComposerToolbarControlLabel(
+                title: nil,
+                systemImage: "plus",
+                trailingSystemImage: nil,
+                isSelected: false,
+                tint: nil,
+                titleMaxWidth: nil,
+                accessibilityLabel: L10n.text("ui.add_content")
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(attachments.count >= Self.maximumImageAttachmentCount || teamStore.isSending)
+    }
+
+    private var teamModelMenu: some View {
+        Menu {
+            ForEach(teamStore.agents) { agent in
+                Button {
+                    teamStore.toggleAgent(agent)
+                } label: {
+                    Label(
+                        "\(agent.displayName) · \(agent.modelLabel)",
+                        systemImage: teamStore.selectedAgentIDs.contains(agent.id)
+                            ? "checkmark"
+                            : "cpu"
+                    )
+                }
+            }
+        } label: {
+            ComposerToolbarControlLabel(
+                title: teamModelTitle,
+                systemImage: "cpu",
+                trailingSystemImage: nil,
+                isSelected: false,
+                tint: nil,
+                titleMaxWidth: 180,
+                accessibilityLabel: L10n.text("ui.switch_model_and_inference_strength")
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var teamOptionsMenu: some View {
+        Menu {
+            Button {
+                sendsAsTask.toggle()
+            } label: {
+                Label(
+                    L10n.text("ui.task"),
+                    systemImage: sendsAsTask ? "checkmark.square.fill" : "square"
+                )
+            }
+
+            Button {
+                teamStore.selectAgents(teamStore.agents.filter(\.canReceiveWork))
+            } label: {
+                Label(L10n.text("ui.agent_team"), systemImage: "person.3.fill")
+            }
+        } label: {
+            ComposerToolbarControlLabel(
+                title: L10n.text("ui.options"),
+                systemImage: "slider.horizontal.3",
+                trailingSystemImage: nil,
+                isSelected: sendsAsTask,
+                tint: nil,
+                titleMaxWidth: nil,
+                accessibilityLabel: L10n.text("ui.session_options")
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var enabledSkills: [SkillCapability] {
+        let discovered = (sessionStore.capabilityList?.skills ?? [])
+            .filter(\.enabled)
+        return (discovered + manualSkills)
+            .reduce(into: [String: SkillCapability]()) { result, skill in
+                result[skill.path] = skill
+            }
+            .values
+            .sorted {
+                $0.presentationName.localizedStandardCompare($1.presentationName) == .orderedAscending
+            }
+    }
+
+    private var selectedSkills: [SkillCapability] {
+        enabledSkills.filter { selectedSkillPaths.contains($0.path) }
+    }
+
+    private var teamModelTitle: String {
+        let selected = teamStore.agents.filter { teamStore.selectedAgentIDs.contains($0.id) }
+        guard let first = selected.first else {
+            return L10n.text("ui.default_model")
+        }
+        if selected.count == 1 {
+            return first.modelLabel
+        }
+        return "\(first.modelLabel) +\(selected.count - 1)"
+    }
+
+    private func toggleTeamSkill(_ skill: SkillCapability) {
+        if selectedSkillPaths.contains(skill.path) {
+            selectedSkillPaths.remove(skill.path)
+        } else {
+            selectedSkillPaths.insert(skill.path)
+        }
+    }
+
+    private func toggleTeamVoiceInput() {
+        if voiceInput.isRecording {
+            voiceInput.stop()
+            return
+        }
+        guard !voiceInput.isPreparing, !isVoiceTranscribing else { return }
+        voiceInput.start { recording in
+            guard let recording else { return }
+            Task { @MainActor in
+                isVoiceTranscribing = true
+                defer {
+                    isVoiceTranscribing = false
+                    try? FileManager.default.removeItem(at: recording.fileURL)
+                }
+                do {
+                    let data = try await Task.detached(priority: .userInitiated) {
+                        try Data(contentsOf: recording.fileURL)
+                    }.value
+                    let response = try await sessionStore.transcribeVoice(
+                        filename: recording.fileURL.lastPathComponent,
+                        contentType: "audio/mp4",
+                        audioData: data,
+                        language: VoiceTranscriptionDefaults.languageCode
+                    )
+                    let separator = draft.isEmpty || draft.last?.isWhitespace == true ? "" : " "
+                    draft += separator + response.text
+                    composerFocused = true
+                    attachmentErrorMessage = nil
+                } catch {
+                    attachmentErrorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func attachmentStrip(tokens: ThemeTokens) -> some View {
@@ -607,6 +865,11 @@ struct TeamConversationView: View {
 
     private func sendDraft() {
         let normalizedText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sendingContent = TeamExecutionScope.wrap(
+            normalizedText,
+            permissionMode: permissionMode,
+            skills: selectedSkills
+        )
         let sendingAttachments = attachments
         let sendingAsTask = sendsAsTask
         guard canSend else {
@@ -616,9 +879,9 @@ struct TeamConversationView: View {
         draft = ""
         attachments.removeAll()
         sendsAsTask = false
-        Task {
+        let task = Task {
             if await teamStore.send(
-                normalizedText,
+                sendingContent,
                 imageDataURLs: sendingAttachments,
                 asTask: sendingAsTask
             ) == false {
@@ -628,7 +891,11 @@ struct TeamConversationView: View {
                     sendsAsTask = sendingAsTask
                 }
             }
+            await MainActor.run {
+                sendTask = nil
+            }
         }
+        sendTask = task
     }
 
     private static let maximumImageAttachmentCount = 8

@@ -85,9 +85,7 @@ enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
         case .claude:
             return L10n.text("ui.create_a_new_claude_code_session")
         case .team:
-            return Locale.preferredLanguages.first?.hasPrefix("zh") == true
-                ? "新建团队协作"
-                : "New team collaboration"
+            return L10n.text("ui.create_team_collaboration")
         }
     }
 
@@ -103,7 +101,8 @@ enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
     }
 
     static func available(claudeChannelAvailable: Bool) -> [Self] {
-        claudeChannelAvailable ? [.codex, .claude, .team] : [.codex, .team]
+        // 团队协作已有独立入口；普通“新会话”只创建单 Agent 会话。
+        claudeChannelAvailable ? [.codex, .claude] : [.codex]
     }
 }
 
@@ -484,7 +483,10 @@ struct WorkspaceRootView: View {
     }
 
     private func combinedSessions(for projectID: String) -> [AgentSession] {
-        (sessionStore.sessions(forProjectID: projectID) + teamStore.sessionIndexEntries(projectID: projectID))
+        (sessionStore.sessions(forProjectID: projectID) +
+         teamStore
+            .sessionIndexEntries(projectID: projectID)
+            .filter { $0.runtimeProvider != "team" })
             .sorted {
                 SessionIndexStore.orderingDate(for: $0) > SessionIndexStore.orderingDate(for: $1)
             }

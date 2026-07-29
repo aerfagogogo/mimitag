@@ -305,7 +305,8 @@ struct SessionListView: View {
     }
 
     private var visibleSessions: [AgentSession] {
-        (sessionStore.sessionLibrarySessions + teamStore.sessionIndexEntries)
+        (sessionStore.sessionLibrarySessions
+            + teamStore.sessionIndexEntries.filter { $0.runtimeProvider != "team" })
             .filter { session in
             (selectedWorkspaceID == "all" || session.projectID == selectedWorkspaceID) &&
                 selectedStatus.includes(session)

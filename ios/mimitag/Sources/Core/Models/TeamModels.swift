@@ -198,7 +198,9 @@ struct TeamMessage: Identifiable, Codable, Hashable {
     }
 
     var displayContent: String {
-        workspaceScope?.message ?? content
+        TeamExecutionScope.parse(from: workspaceScope?.message ?? content)?.message
+            ?? workspaceScope?.message
+            ?? content
     }
 }
 
@@ -273,5 +275,46 @@ struct TeamWorkspaceScope: Hashable {
             return nil
         }
         return TeamWorkspaceScope(name: name, path: path, message: message)
+    }
+}
+
+struct TeamExecutionScope: Hashable {
+    static let prefix = "[mimi-team-execution:"
+
+    let permissionMode: String
+    let skillPaths: [String]
+    let message: String
+
+    static func wrap(
+        _ content: String,
+        permissionMode: ComposerPermissionMode,
+        skills: [SkillCapability]
+    ) -> String {
+        let paths = skills.map(\.path).joined(separator: "|")
+        return "\(prefix)permission=\(permissionMode.rawValue);skills=\(paths)]\n\(content)"
+    }
+
+    static func parse(from content: String) -> TeamExecutionScope? {
+        guard content.hasPrefix(prefix),
+              let closingBracket = content.firstIndex(of: "]")
+        else {
+            return nil
+        }
+        let headerStart = content.index(content.startIndex, offsetBy: prefix.count)
+        let header = String(content[headerStart..<closingBracket])
+        let fields = header.split(separator: ";").map(String.init)
+        let permission = fields.first?
+            .replacingOccurrences(of: "permission=", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let skills = fields.dropFirst().first?
+            .replacingOccurrences(of: "skills=", with: "")
+            .split(separator: "|")
+            .map(String.init) ?? []
+        let bodyStart = content.index(after: closingBracket)
+        return TeamExecutionScope(
+            permissionMode: permission,
+            skillPaths: skills,
+            message: String(content[bodyStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 }

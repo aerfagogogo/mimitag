@@ -1277,8 +1277,8 @@ final class ConversationSnapshotTests: SimplifiedChineseSnapshotTestCase {
             WorkbenchSidebarFooter(
                 tokens: tokens,
                 onOpenSettings: {},
-                onNewSession: {},
-                onRefreshUsage: {}
+                onOpenTeam: {},
+                onNewSession: {}
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
